@@ -5,6 +5,7 @@ import org.openphc.cce.emitter.config.EmitterProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -14,6 +15,8 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 
 @Component("openhim")
+// In Beckn mode OpenHIM is not on the path; OnixHealthIndicator checks the onix callers instead.
+@ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "openhim")
 public class OpenhimHealthIndicator implements HealthIndicator {
 
     private final EmitterProperties properties;

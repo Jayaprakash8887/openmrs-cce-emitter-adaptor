@@ -7,6 +7,8 @@ The **OpenMRS CCE Emitter Adaptor** is a **Spring Boot 3.4 / Java 21** microserv
 It uses **polling** because OpenMRS does not support FHIR Subscriptions:
 - **FHIR R4 API** (`_lastUpdated` queries) for all resource types including Orders (via `ServiceRequest`/`MedicationRequest`) and Visits (via tagged `Encounter`)
 
+**Beckn mode (implemented on `demo-beckn`, not yet tested against real onix).** On this branch the emitter runs in Beckn mode by default (`OPENMRS_EMITTER_TARGET=beckn`): it sends Beckn messages through the `openmrs-onix` adapter instead of FHIR to OpenHIM: every resource to the HIE (which passes it on to CCE), and referrals and their outcomes straight to Spice. Set `OPENMRS_EMITTER_TARGET=openhim` to keep today's OpenHIM path, unchanged. See [docs/beckn-integration.md](docs/beckn-integration.md).
+
 ## Tech Stack
 
 | Technology | Version | Purpose |
@@ -90,6 +92,7 @@ src/main/java/org/openphc/cce/emitter/
 | [Deployment Guide](docs/deployment-guide.md) | Build, Docker, checklist |
 | [API Reference](docs/api-reference.md) | Actuator endpoints, metrics, consumed APIs |
 | [Operations Runbook](docs/operations-runbook.md) | Troubleshooting, alerts, monitoring |
+| [Beckn Integration](docs/beckn-integration.md) | Beckn mode: flows, messages, settings |
 
 ## Key Environment Variables
 

@@ -98,6 +98,40 @@ When enabled (default), `OrderIdentifierEnricher` classifies completed/revoked r
 
 Trigger condition: classification fires when **all** of the following are true — (1) resource is a `ServiceRequest`; (2) `enabled=true`; (3) OpenMRS `orderType.display` equals `order-type-name` (case-insensitive); (4) `status` is `completed` or `revoked`. `MedicationRequest` only receives ACSN enrichment, never referral-response classification.
 
+### Output Target and Beckn
+
+> **Status:** Implemented on branch `demo-beckn` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. See [beckn-integration.md](beckn-integration.md) § 11 for the full YAML.
+>
+> With `OPENMRS_EMITTER_TARGET=beckn` the emitter fails to start if a required id is missing; the error names each missing setting. Only the settings of the legs that are on are required. The ids have no defaults; `application-beckn-demo.yml` (profile `beckn-demo`) holds the made-up example values.
+
+With `OPENMRS_EMITTER_TARGET=openhim` the emitter posts FHIR to OpenHIM as described above, and none of the `emitter.beckn.*` settings are read.
+
+| Property | Env Var | Default | Description |
+|----------|---------|---------|-------------|
+| `emitter.target` | `OPENMRS_EMITTER_TARGET` | `beckn` (on `demo-beckn`) | `openhim` (today's path) or `beckn` (post Beckn messages to `openmrs-onix`) |
+| `emitter.beckn.onix.bap-caller-url` | `OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL` | `http://onix-bap:8081/bap/caller` | `onix-bap` caller. Used for `update` to the HIE and to Spice |
+| `emitter.beckn.onix.bpp-caller-url` | `OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL` | `http://onix-bpp:8082/bpp/caller` | `onix-bpp` caller. Used for `on_status` to Spice |
+| `emitter.beckn.onix.timeout` | `OPENMRS_EMITTER_BECKN_ONIX_TIMEOUT` | `50s` | Wait for one onix answer. The outermost hop: longer than every hop behind it ([beckn-integration.md](beckn-integration.md) § 10.4) |
+| `emitter.beckn.schema-base-url` | `OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL` | `https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema` | Base URL of the `CceClinicalEvent` schema. The files are in the cce-beckn-service `schema/` folder |
+| `emitter.beckn.self.network-id` | `OPENMRS_EMITTER_BECKN_SELF_NETWORK_ID` | — | Optional. Sent as `context.networkId` when set |
+| `emitter.beckn.self.bap-id` / `bap-uri` | `OPENMRS_EMITTER_BECKN_SELF_BAP_ID` / `OPENMRS_EMITTER_BECKN_SELF_BAP_URI` | — | OpenMRS's consumer (BAP) id and receiver URI |
+| `emitter.beckn.self.bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_SELF_BPP_ID` / `OPENMRS_EMITTER_BECKN_SELF_BPP_URI` | — | OpenMRS's provider (BPP) id and receiver URI |
+| `emitter.beckn.openhim.bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_OPENHIM_BPP_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_BPP_URI` | — | OpenHIM's Beckn adapter (provider of the HIE feed) |
+| `emitter.beckn.openhim.contract-id` / `transaction-id` | `OPENMRS_EMITTER_BECKN_OPENHIM_CONTRACT_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_TRANSACTION_ID` | — | HIE feed contract. Issued by the OpenHIM admin |
+| `emitter.beckn.openhim.commitment-file` | `OPENMRS_EMITTER_BECKN_OPENHIM_COMMITMENT_FILE` | `classpath:beckn/commitment-hie.json` | Commitment sent in every HIE message. OpenHIM's own (example id `hie-event-feed`) |
+| `emitter.beckn.spice.name` | `OPENMRS_EMITTER_BECKN_SPICE_NAME` | `Spice` | The one HMIS peer |
+| `emitter.beckn.spice.bap-id` / `bap-uri` / `bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_SPICE_BAP_ID`, `…_BAP_URI`, `…_BPP_ID`, `…_BPP_URI` | — | The peer's Beckn ids and receiver URIs |
+| `emitter.beckn.spice.facility-codes` | `OPENMRS_EMITTER_BECKN_SPICE_FACILITY_CODES` (comma-separated) | — | Destination facility codes the peer serves. A referral out goes to the peer only if its `performer` facility code is in this list |
+| `emitter.beckn.spice.referrals-in.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_IN_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `on_status` to the peer. Issued by the OpenMRS admin |
+| `emitter.beckn.spice.referrals-out.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_OUT_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `update` to the peer. Issued by the peer's admin |
+| `emitter.beckn.legs.cce-events` | `OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS` | `true` | Send every resource to the HIE |
+| `emitter.beckn.legs.referrals-in` | `OPENMRS_EMITTER_BECKN_LEG_REFERRALS_IN` | `true` | Send referral outcomes to the peer |
+| `emitter.beckn.legs.referrals-out` | `OPENMRS_EMITTER_BECKN_LEG_REFERRALS_OUT` | `true` | Send referrals out to the peer |
+
+Beckn mode reuses `emitter.openhim.retry.max-attempts` and `emitter.openhim.retry.backoff-ms`. Raise them above `3` and `2000` in Beckn mode: a message is dropped after the last try. CCE advises a growing wait (1 min, 5 min, 30 min); these retries are still seconds apart (open question Q4). The other `emitter.openhim.*` settings are not used in Beckn mode.
+
+The referral classifier reads the existing `emitter.referral.response.category-system`, `emitter.referral.direction.category-system` and `emitter.referral.direction.destination-identifier-system` settings. Do not change them without telling the HIE and Spice.
+
 ### Checkpoint
 
 | Property | Env Var | Default | Description |
@@ -153,6 +187,19 @@ OPENHIM_RETRY_MAX_ATTEMPTS=5
 CHECKPOINT_FILE_PATH=/app/data/checkpoints.json
 LOG_LEVEL_ROOT=WARN
 ```
+
+## Example: Beckn Mode
+
+```bash
+OPENMRS_EMITTER_TARGET=beckn
+OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL=http://onix-bap:8081/bap/caller
+OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL=http://onix-bpp:8082/bpp/caller
+OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL=https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema
+OPENHIM_RETRY_MAX_ATTEMPTS=6
+OPENHIM_RETRY_BACKOFF_MS=5000
+```
+
+The Beckn ids, contract ids and facility codes are set with the `OPENMRS_EMITTER_BECKN_*` variables in the table above, or in YAML (for example a profile file), as shown in [beckn-integration.md](beckn-integration.md) § 11. The `OPENMRS_EMITTER_` prefix keeps them apart from the receiver's (`OPENMRS_RECEIVER_`) and the OpenHIM emitter's (`OPENHIM_EMITTER_`) when all three share one env file.
 
 ---
 

@@ -11,6 +11,50 @@ spring:
     timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
 
 emitter:
+  target: ${OPENMRS_EMITTER_TARGET:beckn}           # beckn (default on the demo-beckn branch) | openhim (read once at start)
+
+  # Read only when target=beckn. See docs/beckn-integration.md § 11.
+  # Every value can be set from the environment. The variables carry the OPENMRS_EMITTER_ prefix so
+  # that this adaptor, the receiver and the OpenHIM emitter can share one env file.
+  # The ids have no defaults: the emitter does not start in Beckn mode until they are set
+  # (or use the beckn-demo profile, application-beckn-demo.yml, for the made-up example ids).
+  beckn:
+    onix:
+      bap-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL:http://onix-bap:8081/bap/caller}
+      bpp-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL:http://onix-bpp:8082/bpp/caller}
+      timeout: ${OPENMRS_EMITTER_BECKN_ONIX_TIMEOUT:50s}                     # outermost hop of the timeout budget
+    schema-base-url: ${OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL:https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema}
+    self:
+      network-id: ${OPENMRS_EMITTER_BECKN_SELF_NETWORK_ID:}                  # optional; sent as context.networkId when set
+      bap-id: ${OPENMRS_EMITTER_BECKN_SELF_BAP_ID:}
+      bap-uri: ${OPENMRS_EMITTER_BECKN_SELF_BAP_URI:}
+      bpp-id: ${OPENMRS_EMITTER_BECKN_SELF_BPP_ID:}
+      bpp-uri: ${OPENMRS_EMITTER_BECKN_SELF_BPP_URI:}
+    openhim:
+      bpp-id: ${OPENMRS_EMITTER_BECKN_OPENHIM_BPP_ID:}
+      bpp-uri: ${OPENMRS_EMITTER_BECKN_OPENHIM_BPP_URI:}
+      contract-id: ${OPENMRS_EMITTER_BECKN_OPENHIM_CONTRACT_ID:}
+      transaction-id: ${OPENMRS_EMITTER_BECKN_OPENHIM_TRANSACTION_ID:}
+      commitment-file: ${OPENMRS_EMITTER_BECKN_OPENHIM_COMMITMENT_FILE:classpath:beckn/commitment-hie.json}
+    spice:
+      name: ${OPENMRS_EMITTER_BECKN_SPICE_NAME:Spice}
+      bap-id: ${OPENMRS_EMITTER_BECKN_SPICE_BAP_ID:}
+      bap-uri: ${OPENMRS_EMITTER_BECKN_SPICE_BAP_URI:}
+      bpp-id: ${OPENMRS_EMITTER_BECKN_SPICE_BPP_ID:}
+      bpp-uri: ${OPENMRS_EMITTER_BECKN_SPICE_BPP_URI:}
+      facility-codes: ${OPENMRS_EMITTER_BECKN_SPICE_FACILITY_CODES:}     # comma-separated, e.g. 0417,0418
+      referrals-in:                                          # OpenMRS sends on_status here
+        contract-id: ${OPENMRS_EMITTER_BECKN_REFERRALS_IN_CONTRACT_ID:}
+        transaction-id: ${OPENMRS_EMITTER_BECKN_REFERRALS_IN_TRANSACTION_ID:}
+        commitment-file: ${OPENMRS_EMITTER_BECKN_REFERRALS_IN_COMMITMENT_FILE:classpath:beckn/commitment-referral.json}
+      referrals-out:                                         # OpenMRS sends update here
+        contract-id: ${OPENMRS_EMITTER_BECKN_REFERRALS_OUT_CONTRACT_ID:}
+        transaction-id: ${OPENMRS_EMITTER_BECKN_REFERRALS_OUT_TRANSACTION_ID:}
+        commitment-file: ${OPENMRS_EMITTER_BECKN_REFERRALS_OUT_COMMITMENT_FILE:classpath:beckn/commitment-referral.json}
+    legs:
+      cce-events: ${OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS:true}
+      referrals-in: ${OPENMRS_EMITTER_BECKN_LEG_REFERRALS_IN:true}
+      referrals-out: ${OPENMRS_EMITTER_BECKN_LEG_REFERRALS_OUT:true}
   openmrs:
     name: "${OPENMRS_NAME:openmrs}"
     base-url: "${OPENMRS_BASE_URL:http://localhost:8080/openmrs}"

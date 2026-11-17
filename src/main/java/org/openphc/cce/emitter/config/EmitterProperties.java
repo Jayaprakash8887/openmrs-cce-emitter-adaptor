@@ -7,12 +7,22 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 @Data
 @Validated
 @ConfigurationProperties(prefix = "emitter")
 public class EmitterProperties {
+
+    /** Output path, read once at start: {@code openhim} (default, FHIR to OpenHIM) or {@code beckn}. */
+    @NotNull
+    private Target target = Target.BECKN;
+
+    /** Beckn settings; read only when {@link #target} is {@code beckn}. */
+    @Valid
+    private BecknConfig beckn = new BecknConfig();
 
     @Valid
     @NotNull
@@ -39,6 +49,79 @@ public class EmitterProperties {
 
     @Valid
     private TestOrderCategoryConfig testOrderCategory = new TestOrderCategoryConfig();
+
+    public enum Target { OPENHIM, BECKN }
+
+    public boolean isBecknTarget() {
+        return target == Target.BECKN;
+    }
+
+    @Data
+    public static class BecknConfig {
+        private OnixConfig onix = new OnixConfig();
+        /** Base of the {@code CceClinicalEvent} {@code @context} URL. */
+        private String schemaBaseUrl = "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema";
+        private BecknSelfConfig self = new BecknSelfConfig();
+        private BecknOpenhimConfig openhim = new BecknOpenhimConfig();
+        private BecknSpiceConfig spice = new BecknSpiceConfig();
+        private BecknLegsConfig legs = new BecknLegsConfig();
+    }
+
+    @Data
+    public static class OnixConfig {
+        /** {@code onix-bap} caller base URL; the emitter appends {@code /update}. */
+        private String bapCallerUrl = "http://onix-bap:8081/bap/caller";
+        /** {@code onix-bpp} caller base URL; the emitter appends {@code /on_status}. */
+        private String bppCallerUrl = "http://onix-bpp:8082/bpp/caller";
+        /** Wait for one answer. The outermost hop of the timeout budget. */
+        private Duration timeout = Duration.ofSeconds(50);
+    }
+
+    @Data
+    public static class BecknSelfConfig {
+        /** Optional; sent as {@code context.networkId} when set. */
+        private String networkId;
+        private String bapId;
+        private String bapUri;
+        private String bppId;
+        private String bppUri;
+    }
+
+    @Data
+    public static class BecknOpenhimConfig {
+        private String bppId;
+        private String bppUri;
+        private String contractId;
+        private String transactionId;
+        private String commitmentFile = "classpath:beckn/commitment-hie.json";
+    }
+
+    @Data
+    public static class BecknSpiceConfig {
+        private String name = "Spice";
+        private String bapId;
+        private String bapUri;
+        private String bppId;
+        private String bppUri;
+        /** Destination facility codes the peer serves. */
+        private List<String> facilityCodes = new ArrayList<>();
+        private BecknContractConfig referralsIn = new BecknContractConfig();
+        private BecknContractConfig referralsOut = new BecknContractConfig();
+    }
+
+    @Data
+    public static class BecknContractConfig {
+        private String contractId;
+        private String transactionId;
+        private String commitmentFile = "classpath:beckn/commitment-referral.json";
+    }
+
+    @Data
+    public static class BecknLegsConfig {
+        private boolean cceEvents = true;
+        private boolean referralsIn = true;
+        private boolean referralsOut = true;
+    }
 
     @Data
     public static class OpenmrsConfig {

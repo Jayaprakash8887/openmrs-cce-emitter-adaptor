@@ -8,12 +8,14 @@ import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Bundle;
+import org.openphc.cce.emitter.beckn.BecknTargetForwarder;
 import org.openphc.cce.emitter.config.EmitterProperties;
 import org.openphc.cce.emitter.config.EmitterProperties.FhirPollingConfig;
 import org.openphc.cce.emitter.config.EmitterProperties.OpenmrsConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -54,6 +56,8 @@ public class FhirPollerService {
     private final MedicationDispenseContextEnricher medicationDispenseContextEnricher;
     private final CodingSystemNormalizer codingSystemNormalizer;
     private final MeterRegistry meterRegistry;
+    /** Present only when {@code emitter.target=beckn}; then it replaces {@link #forwardingEngine}. */
+    private final BecknTargetForwarder becknTargetForwarder;
 
     public FhirPollerService(EmitterProperties properties,
                              FhirContext fhirContext,
@@ -72,7 +76,8 @@ public class FhirPollerService {
                              EncounterStatusEnricher encounterStatusEnricher,
                              MedicationDispenseContextEnricher medicationDispenseContextEnricher,
                              CodingSystemNormalizer codingSystemNormalizer,
-                             MeterRegistry meterRegistry) {
+                             MeterRegistry meterRegistry,
+                             ObjectProvider<BecknTargetForwarder> becknTargetForwarder) {
         this.properties = properties;
         this.fhirContext = fhirContext;
         this.restTemplate = restTemplate;
@@ -91,6 +96,10 @@ public class FhirPollerService {
         this.medicationDispenseContextEnricher = medicationDispenseContextEnricher;
         this.codingSystemNormalizer = codingSystemNormalizer;
         this.meterRegistry = meterRegistry;
+        this.becknTargetForwarder = becknTargetForwarder.getIfAvailable();
+        if (this.becknTargetForwarder != null) {
+            log.info("Output target: beckn (openmrs-onix callers)");
+        }
     }
 
     @Scheduled(fixedDelayString = "${emitter.polling.fhir.interval-seconds:30}000")
@@ -228,7 +237,9 @@ public class FhirPollerService {
             // last: also covers codings added by the enrichers above
             codingSystemNormalizer.normalize(enriched);
             String json = parser.encodeResourceToString(enriched);
-            ForwardResult result = forwardingEngine.forward(json, resourceType, resourceId);
+            ForwardResult result = becknTargetForwarder != null
+                    ? becknTargetForwarder.forward(json, resourceType)
+                    : forwardingEngine.forward(json, resourceType, resourceId);
             return result.isSuccess();
         } finally {
             MDC.remove("resourceId");
