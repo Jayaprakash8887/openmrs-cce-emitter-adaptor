@@ -1,0 +1,58 @@
+{
+  "context": {
+    "version": "2.0.0",
+    "action": "on_status",
+    "bapId": "bap.spice.example.org",
+    "bapUri": "https://spice.example.org/bap/receiver",
+    "bppId": "bpp.openmrs.example.org",
+    "bppUri": "https://openmrs.example.org/bpp/receiver",
+    "transactionId": "a41f6b2c-9d3e-4a7b-8c1d-2e3f4a5b6c7d",
+    "messageId": "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b",
+    "timestamp": "2026-11-16T09:30:40Z"
+  },
+  "message": {
+    "contract": {
+      "id": "e2c9a7b4-6f1d-4b3a-9c8e-7d6f5a4b3c2d",
+      "status": { "code": "ACTIVE" },
+      "commitments": [
+        {
+          "id": "referral",
+          "status": { "descriptor": { "code": "ACTIVE" } },
+          "resources": [
+            { "id": "referral-intake", "descriptor": { "name": "Referral intake" }, "quantity": { "count": 1 } }
+          ],
+          "offer": { "id": "referral-intake-offer", "resourceIds": ["referral-intake"] }
+        }
+      ],
+      "performance": [
+        {
+          "id": "6b7c8d9e-0f1a-5b2c-9d3e-4f5a6b7c8d9e",
+          "status": { "code": "COMPLETED" },
+          "performanceAttributes": {
+            "@context": "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CceClinicalEvent/v1.0/context.jsonld",
+            "@type": "cce:CceClinicalEvent",
+            "eventType": "ServiceRequest",
+            "patientId": "1198503150001234",
+            "fhirVersion": "4.0.1",
+            "sourceEventId": "ServiceRequest/0fe4c80e-3a2b-4c1d-8e9f-a0b1c2d3e4f5",
+            "resource": {
+              "resourceType": "ServiceRequest",
+              "id": "0fe4c80e-3a2b-4c1d-8e9f-a0b1c2d3e4f5",
+              "meta": { "lastUpdated": "2026-11-16T09:30:10Z" },
+              "status": "completed",
+              "intent": "order",
+              "category": [
+                { "coding": [ { "system": "http://cce.openphc.org/CodeSystem/event-type", "code": "referral-response" } ] }
+              ],
+              "basedOn": [
+                { "identifier": { "system": "http://mdtlabs.com/service-request-id", "value": "1838" } }
+              ],
+              "subject": { "reference": "Patient/1198503150001234" },
+              "note": [ { "text": "Patient seen. Medication adjusted. Review in four weeks." } ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -104,6 +104,65 @@ groups:
 
 ---
 
+## Beckn Mode
+
+> **Status:** Implemented on branch `demo-beckn` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. See [beckn-integration.md](beckn-integration.md).
+
+This section applies when `OPENMRS_EMITTER_TARGET=beckn`, the default on the `demo-beckn` branch. With `openhim`, everything above is unchanged.
+
+### Checks
+
+```bash
+# Which target is the emitter using?
+docker exec openmrs-cce-emitter-adaptor printenv OPENMRS_EMITTER_TARGET
+
+# Can the emitter reach the onix callers? (any HTTP code means reachable; 000 means not)
+docker exec openmrs-cce-emitter-adaptor curl -s -o /dev/null -w '%{http_code}\n' http://onix-bap:8081/bap/caller/update
+docker exec openmrs-cce-emitter-adaptor curl -s -o /dev/null -w '%{http_code}\n' http://onix-bpp:8082/bpp/caller/on_status
+
+# One line per Beckn message
+docker compose logs openmrs-cce-emitter-adaptor | grep 'beckn action='
+
+# Beckn metrics
+curl -s http://localhost:8085/actuator/prometheus | grep openmrs_beckn_
+```
+
+The log lines carry ids and results only. Message bodies and patient data are not logged. To follow one message across systems, search for its `messageId` or event id in the onix and HIE logs. Each retry has a new `messageId`; the event id stays the same.
+
+A `Nack` body looks like `{ "message": { "status": "NACK", "messageId": "…", "error": { "code": "…", "message": "…" } } }`. The log line carries `error.code` and `error.message`. `400` codes (`BAD_REQUEST`, `NOT_SUPPORTED`, `EVENT_REJECTED`) are not retried. `500` codes (`UNAVAILABLE`, `COLLECTOR_UNAVAILABLE`, `INTERNAL_ERROR`) are retried.
+
+In Beckn mode the health endpoint does not check OpenHIM. It checks `onix` instead: a `GET` to each onix caller in use; any HTTP answer is `UP`, no answer is `DOWN` (`curl -s localhost:8085/actuator/health` with `HEALTH_SHOW_DETAILS=always` shows the URLs).
+
+Resources with no patient (`Location`, `Practitioner`, …) are skipped in Beckn mode: `grep 'beckn skip'`, metric `openmrs_beckn_resources_skipped_total`.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| No `openmrs_beckn_*` metrics; `forward.success` rising | Emitter is on the OpenHIM path | Set `OPENMRS_EMITTER_TARGET=beckn` and restart |
+| `result=NACK` on every message | Schema, signature or contract problem | Read `error.code` and `error.message` in the log line. Check `OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL`, the contract ids in `emitter.beckn.*`, and that both onix containers hold `CceClinicalEvent` and OpenMRS's keys |
+| `NACK` with `EVENT_REJECTED` on `leg=cce-events` | CCE refused the event | Read `error.message`. Fix the data in OpenMRS. The corrected resource gets a new event id, so CCE does not drop it as a duplicate |
+| `NACK` only on `leg=cce-events` | HIE does not know OpenMRS or the HIE feed contract | Ask the OpenHIM admin to check the contract id, `transactionId` and source mapping for OpenMRS |
+| Retries then `messages_dropped_total{reason="retries-exhausted"}` | onix, the HIE, CCE or Spice is down or slow | Check the far side. Raise `OPENHIM_RETRY_MAX_ATTEMPTS` / `OPENHIM_RETRY_BACKOFF_MS`. Dropped messages are not resent (rewind the checkpoint to resend) |
+| Connection refused to `onix-bap` / `onix-bpp` | Containers down or not on `cce-net` | Start them; check `docker network inspect cce-net` |
+| Poll cycles take much longer | Each message waits for the answer from the far side (up to 50 s) | Check `openmrs_beckn_onix_latency_seconds`; check `emitter.beckn.onix.timeout` and the timeout budget ([beckn-integration.md](beckn-integration.md) § 10.4) |
+| Retries on `leg=cce-events` although CCE got the event | An inner hop waits longer than an outer one, or onix still has the 5 s default | Check every hop against the timeout budget. A resend is safe: CCE answers `Ack` and drops it as a duplicate |
+| No `on_update` logged by the receiver for a sent event | `on_update` is sent once and may be lost | Nothing to do if the emitter logged `result=ACK`. The `Ack` is the proof |
+| Referral out not sent to Spice | Facility code not in `spice.facility-codes`, or no facility code on the referral | Check `openmrs_beckn_referrals_out_total{outcome="facility-not-served"}`; check the destination Location's facility-code attribute |
+| Referral outcome not sent to Spice | Referral was not marked `referral-response`, or `legs.referrals-in=false` | Check `REFERRAL_RESPONSE_ENABLED` and the order type name |
+| CCE shows a resent event as new | The resource JSON changed between polls, so its hash changed | Look for an enricher that adds a changing field |
+
+### Alerts
+
+```yaml
+      - alert: OpenmrsBecknMessagesDropped
+        expr: increase(openmrs_beckn_messages_dropped_total[10m]) > 0
+        for: 1m
+        labels: { severity: critical }
+```
+
+---
+
 ## Maintenance
 
 - **Single instance** only — no active-active scaling (would cause duplicates)
