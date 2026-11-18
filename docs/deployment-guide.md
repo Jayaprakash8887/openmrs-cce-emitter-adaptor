@@ -109,7 +109,7 @@ The Beckn ids, contract ids and facility codes go in YAML ([configuration-guide.
 - [ ] `onix-bap` and `onix-bpp` are running on `cce-net` and reachable from the emitter
 - [ ] Both onix containers have OpenMRS's own Beckn ids and keys, and the `CceClinicalEvent` schema (from the cce-beckn-service `schema/` folder)
 - [ ] `responseHeaderTimeout` on `onix-bap` is raised from the 5 s default to at least 45 s, and the emitter's `emitter.beckn.onix.timeout` is 50 s ([beckn-integration.md](beckn-integration.md) § 10.4)
-- [ ] The HIE feed contract id and `transactionId` are issued by the OpenHIM admin and set in `emitter.beckn.openhim`
+- [ ] A HIE feed contract id and `transactionId` are set in `emitter.beckn.openhim` (any stable non-blank ids; OpenHIM does not match them)
 - [ ] The "referrals in" and "referrals out" ids are agreed with Spice and set in `emitter.beckn.spice`
 - [ ] Spice's facility codes are set in `emitter.beckn.spice.facility-codes`
 - [ ] `OPENMRS_EMITTER_TARGET=beckn` is set, and the emitter is restarted

@@ -682,9 +682,9 @@ emitter:
 | `schema-base-url` | Base of the `CceClinicalEvent` `@context` URL. The schema files are in the `schema/` folder of the cce-beckn-service repository |
 | `self` | OpenMRS's own Beckn ids: consumer (`bap-*`) and provider (`bpp-*`) |
 | `self.network-id` | Optional. Put into `context.networkId` when set |
-| `openhim` | OpenHIM's provider id and the HIE feed contract. Issued by the OpenHIM admin |
+| `openhim` | OpenHIM's provider id and the HIE feed contract ids. Any stable non-blank ids: without `confirm` none are issued, and OpenHIM accepts and echoes them |
 | `spice` | The one HMIS peer (Spice) and its facility codes |
-| `spice.referrals-in` | Contract for outcomes of referrals from Spice. Issued by the OpenMRS admin |
+| `spice.referrals-in` | Contract ids for `on_status` outcomes of referrals from Spice. The receiver does not check Spice's contract id, so these are only what Spice expects back |
 | `spice.referrals-out` | Contract for referrals to Spice. Issued by the Spice admin |
 | `*.commitment-file` | The commitment JSON repeated in every message on that contract |
 | `legs.*` | Turns each leg on or off. With `cce-events: false` nothing goes to the HIE |

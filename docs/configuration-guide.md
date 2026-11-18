@@ -117,12 +117,12 @@ With `OPENMRS_EMITTER_TARGET=openhim` the emitter posts FHIR to OpenHIM as descr
 | `emitter.beckn.self.bap-id` / `bap-uri` | `OPENMRS_EMITTER_BECKN_SELF_BAP_ID` / `OPENMRS_EMITTER_BECKN_SELF_BAP_URI` | — | OpenMRS's consumer (BAP) id and receiver URI |
 | `emitter.beckn.self.bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_SELF_BPP_ID` / `OPENMRS_EMITTER_BECKN_SELF_BPP_URI` | — | OpenMRS's provider (BPP) id and receiver URI |
 | `emitter.beckn.openhim.bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_OPENHIM_BPP_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_BPP_URI` | — | OpenHIM's Beckn adapter (provider of the HIE feed) |
-| `emitter.beckn.openhim.contract-id` / `transaction-id` | `OPENMRS_EMITTER_BECKN_OPENHIM_CONTRACT_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_TRANSACTION_ID` | — | HIE feed contract. Issued by the OpenHIM admin |
+| `emitter.beckn.openhim.contract-id` / `transaction-id` | `OPENMRS_EMITTER_BECKN_OPENHIM_CONTRACT_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_TRANSACTION_ID` | — | HIE feed contract ids. Any stable non-blank values; OpenHIM accepts any and echoes them |
 | `emitter.beckn.openhim.commitment-file` | `OPENMRS_EMITTER_BECKN_OPENHIM_COMMITMENT_FILE` | `classpath:beckn/commitment-hie.json` | Commitment sent in every HIE message. OpenHIM's own (example id `hie-event-feed`) |
 | `emitter.beckn.spice.name` | `OPENMRS_EMITTER_BECKN_SPICE_NAME` | `Spice` | The one HMIS peer |
 | `emitter.beckn.spice.bap-id` / `bap-uri` / `bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_SPICE_BAP_ID`, `…_BAP_URI`, `…_BPP_ID`, `…_BPP_URI` | — | The peer's Beckn ids and receiver URIs |
 | `emitter.beckn.spice.facility-codes` | `OPENMRS_EMITTER_BECKN_SPICE_FACILITY_CODES` (comma-separated) | — | Destination facility codes the peer serves. A referral out goes to the peer only if its `performer` facility code is in this list |
-| `emitter.beckn.spice.referrals-in.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_IN_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `on_status` to the peer. Issued by the OpenMRS admin |
+| `emitter.beckn.spice.referrals-in.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_IN_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `on_status` to the peer. Agreed with the peer; the receiver does not check incoming contract ids |
 | `emitter.beckn.spice.referrals-out.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_OUT_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `update` to the peer. Issued by the peer's admin |
 | `emitter.beckn.legs.cce-events` | `OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS` | `true` | Send every resource to the HIE |
 | `emitter.beckn.legs.referrals-in` | `OPENMRS_EMITTER_BECKN_LEG_REFERRALS_IN` | `true` | Send referral outcomes to the peer |
