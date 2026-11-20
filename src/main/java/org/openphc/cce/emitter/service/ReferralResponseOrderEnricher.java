@@ -30,6 +30,10 @@ import org.springframework.web.client.RestTemplate;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,6 +50,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * type → queries OpenMRS REST for orders in that encounter → finds the DISCONTINUE order →
  * fetches previousOrder details → adds extension with order metadata.
  *
+ * <p>The DISCONTINUE order is created a moment after the form is saved, so the poll can see the
+ * encounter (and the orders saved with it) before it exists. The referral is then the patient's one
+ * inbound referral order ("Referral In" encounter) that was open when the encounter was saved. A
+ * Referral Response whose referral cannot be identified yet is not cached, so later resources of the
+ * same encounter (a lab result entered afterwards, say) are still linked.
+ *
  * <p>For any other DomainResource (Observation, Condition, Procedure, etc.): resolves the
  * encounter reference via {@code getEncounter()} → same enrichment flow.
  */
@@ -58,6 +68,8 @@ public class ReferralResponseOrderEnricher {
 
     private static final String EXTENSION_URL = "http://cce.openphc.org/StructureDefinition/source-referral-order";
     private static final String REFERRAL_ORDER_TYPE_UUID = "778a9dc6-87d9-49c1-83d9-caa01041a8ad";
+
+    private static final DateTimeFormatter OPENMRS_DATETIME = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ");
 
     private static final long CACHE_TTL_SECONDS = 3600L;
     private static final int CACHE_MAX_SIZE = 10_000;
@@ -146,9 +158,18 @@ public class ReferralResponseOrderEnricher {
         }
 
         try {
-            OrderDetails details = fetchEncounterOrderDetails(encounterUuid);
+            Lookup lookup = fetchEncounterOrderDetails(encounterUuid);
+            OrderDetails details = lookup.details();
             if (details == null) {
-                log.debug("[ReferralResponseOrderEnricher] No DISCONTINUE referral order in encounter {}", encounterUuid);
+                if (lookup.referralResponse()) {
+                    // A Referral Response whose referral is not identifiable yet. Not cached: the
+                    // referral may become identifiable (its DISCONTINUE order is created moments after
+                    // the form is saved), and later resources of the encounter must still be linked.
+                    log.info("[ReferralResponseOrderEnricher] Referral Response encounter {} has no identifiable referral order yet",
+                            encounterUuid);
+                    recordOutcome("no-order-yet");
+                    return null;
+                }
                 cache.put(encounterUuid, new CacheEntry(null, now.plus(Duration.ofSeconds(CACHE_TTL_SECONDS))));
                 recordOutcome("no-order");
                 return null;
@@ -176,31 +197,47 @@ public class ReferralResponseOrderEnricher {
     }
 
     /**
-     * Checks if the encounter's type UUID matches the configured Referral Response encounter type.
-     * Also retrieves the DISCONTINUE order details in a single REST call.
+     * Checks if the encounter's type UUID matches the configured Referral Response encounter type,
+     * and finds the referral order it answers:
+     * <ol>
+     *   <li>the referral order closed by a DISCONTINUE order in the encounter (the referral-fulfillment
+     *       ESM creates it right after the form is saved), else</li>
+     *   <li>the patient's one inbound referral order that was open when the encounter was saved —
+     *       the case when the encounter is polled before that DISCONTINUE order exists.</li>
+     * </ol>
      */
-    private OrderDetails fetchEncounterOrderDetails(String encounterUuid) throws Exception {
+    private Lookup fetchEncounterOrderDetails(String encounterUuid) throws Exception {
         OpenmrsConfig openmrs = properties.getOpenmrs();
         String url = stripTrailingSlash(openmrs.getBaseUrl())
                 + "/ws/rest/v1/encounter/" + encounterUuid
-                + "?v=custom:(uuid,encounterType:(uuid),orders:(uuid,action,orderType:(uuid),previousOrder:(uuid,accessionNumber,instructions,urgency,concept:(uuid,display),orderType:(uuid,display))))";
+                + "?v=custom:(uuid,encounterDatetime,patient:(uuid),encounterType:(uuid),orders:(uuid,action,orderType:(uuid),previousOrder:(uuid,accessionNumber,instructions,urgency,concept:(uuid,display),orderType:(uuid,display))))";
 
         ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET,
                 new HttpEntity<>(buildHeaders()), String.class);
         String body = response.getBody();
-        if (body == null || body.isBlank()) return null;
+        if (body == null || body.isBlank()) return Lookup.NOT_A_RESPONSE;
 
         JsonNode root = objectMapper.readTree(body);
 
         // Check encounter type
         JsonNode etNode = root.get("encounterType");
-        if (etNode == null) return null;
+        if (etNode == null) return Lookup.NOT_A_RESPONSE;
         String etUuid = textOrNull(etNode, "uuid");
         String cfgUuid = properties.getReferral().getResponse().getResponseEncounterTypeUuid();
-        if (cfgUuid == null || !cfgUuid.equals(etUuid)) return null;
+        if (cfgUuid == null || !cfgUuid.equals(etUuid)) return Lookup.NOT_A_RESPONSE;
 
-        // Find DISCONTINUE referral order
-        JsonNode orders = root.get("orders");
+        OrderDetails discontinued = discontinuedReferral(root.get("orders"));
+        if (discontinued != null) {
+            return new Lookup(true, discontinued);
+        }
+        JsonNode patient = root.get("patient");
+        return new Lookup(true, openInboundReferral(
+                patient == null ? null : textOrNull(patient, "uuid"),
+                parseOpenmrsDate(textOrNull(root, "encounterDatetime"))));
+    }
+
+    /** The referral order closed by a DISCONTINUE referral order among {@code orders}, or null. */
+    private OrderDetails discontinuedReferral(JsonNode orders) {
         if (orders == null || !orders.isArray() || orders.isEmpty()) return null;
 
         for (JsonNode order : orders) {
@@ -215,24 +252,72 @@ public class ReferralResponseOrderEnricher {
             JsonNode prev = order.get("previousOrder");
             if (prev == null || prev.isNull()) continue;
 
-            String prevUuid = textOrNull(prev, "uuid");
-            if (prevUuid == null) continue;
-
-            String accessionNumber = textOrNull(prev, "accessionNumber");
-            String instructions = textOrNull(prev, "instructions");
-            String urgency = textOrNull(prev, "urgency");
-
-            JsonNode conceptNode = prev.get("concept");
-            String conceptUuid = conceptNode != null ? textOrNull(conceptNode, "uuid") : null;
-            String conceptDisplay = conceptNode != null ? textOrNull(conceptNode, "display") : null;
-
-            JsonNode prevOrderTypeNode = prev.get("orderType");
-            String orderTypeDisplay = prevOrderTypeNode != null ? textOrNull(prevOrderTypeNode, "display") : null;
-
-            return new OrderDetails(prevUuid, accessionNumber, instructions, urgency,
-                    conceptUuid, conceptDisplay, orderTypeDisplay);
+            OrderDetails details = orderDetails(prev);
+            if (details != null) return details;
         }
         return null;
+    }
+
+    /**
+     * The patient's inbound referral order that was open at {@code at}: a NEW referral order in a
+     * "Referral In" encounter, activated by then and not stopped before. Null when there is none, or
+     * more than one (the response cannot be told apart from the others).
+     */
+    private OrderDetails openInboundReferral(String patientUuid, OffsetDateTime at) throws Exception {
+        String inboundEncounterType = properties.getReferral().getDirection().getInboundEncounterTypeUuid();
+        if (patientUuid == null || at == null || inboundEncounterType == null) return null;
+
+        String url = stripTrailingSlash(properties.getOpenmrs().getBaseUrl())
+                + "/ws/rest/v1/order?patient=" + patientUuid
+                + "&orderTypes=" + REFERRAL_ORDER_TYPE_UUID
+                + "&v=custom:(uuid,action,dateActivated,dateStopped,accessionNumber,instructions,urgency,"
+                + "concept:(uuid,display),orderType:(uuid,display),encounter:(encounterType:(uuid)))";
+        ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET,
+                new HttpEntity<>(buildHeaders()), String.class);
+        String body = response.getBody();
+        if (body == null || body.isBlank()) return null;
+
+        List<JsonNode> open = new ArrayList<>();
+        for (JsonNode order : objectMapper.readTree(body).path("results")) {
+            if (!"NEW".equals(textOrNull(order, "action"))) continue;
+            if (!inboundEncounterType.equals(textOrNull(order.path("encounter").path("encounterType"), "uuid"))) continue;
+            OffsetDateTime activated = parseOpenmrsDate(textOrNull(order, "dateActivated"));
+            OffsetDateTime stopped = parseOpenmrsDate(textOrNull(order, "dateStopped"));
+            if (activated == null || activated.isAfter(at)) continue;
+            if (stopped != null && stopped.isBefore(at)) continue;
+            open.add(order);
+        }
+        if (open.size() != 1) {
+            log.info("[ReferralResponseOrderEnricher] {} open inbound referral orders for patient {} at {}; none linked",
+                    open.size(), patientUuid, at);
+            return null;
+        }
+        return orderDetails(open.get(0));
+    }
+
+    /** The extension's fields from an OpenMRS REST order, or null when it has no uuid. */
+    private OrderDetails orderDetails(JsonNode order) {
+        String uuid = textOrNull(order, "uuid");
+        if (uuid == null) return null;
+        JsonNode conceptNode = order.get("concept");
+        JsonNode orderTypeNode = order.get("orderType");
+        return new OrderDetails(uuid,
+                textOrNull(order, "accessionNumber"),
+                textOrNull(order, "instructions"),
+                textOrNull(order, "urgency"),
+                conceptNode != null ? textOrNull(conceptNode, "uuid") : null,
+                conceptNode != null ? textOrNull(conceptNode, "display") : null,
+                orderTypeNode != null ? textOrNull(orderTypeNode, "display") : null);
+    }
+
+    /** OpenMRS REST datetime ({@code 2026-11-19T13:58:44.000+0000}), or null. */
+    static OffsetDateTime parseOpenmrsDate(String value) {
+        if (value == null) return null;
+        try {
+            return OffsetDateTime.parse(value, OPENMRS_DATETIME);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
     /**
@@ -350,4 +435,9 @@ public class ReferralResponseOrderEnricher {
                                 String orderTypeDisplay) {}
 
     private record CacheEntry(OrderDetails details, Instant expiresAt) {}
+
+    /** Whether the encounter is a Referral Response, and the referral order it answers (null when unknown). */
+    private record Lookup(boolean referralResponse, OrderDetails details) {
+        static final Lookup NOT_A_RESPONSE = new Lookup(false, null);
+    }
 }
