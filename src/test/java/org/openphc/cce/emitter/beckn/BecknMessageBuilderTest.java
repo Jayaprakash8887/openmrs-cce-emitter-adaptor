@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.openphc.cce.emitter.config.EmitterProperties;
+import org.springframework.core.io.DefaultResourceLoader;
 
 import java.io.InputStream;
 import java.time.Duration;
@@ -16,20 +17,27 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Message shape against the sample in docs/beckn-integration.md § 9 and the CCE Sygnal contract. */
+/**
+ * Message shapes against the samples in docs/beckn-integration.md § 9: the Sygnal event report (CCE
+ * Sygnal contract) and the Beckn referral messages to Spice (unchanged from demo-beckn).
+ */
 class BecknMessageBuilderTest {
 
     private static final String ENCOUNTER = "{\"resourceType\":\"Encounter\",\"id\":\"e\","
             + "\"subject\":{\"reference\":\"Patient/p\"}}";
 
-    private static JsonNode sample() throws Exception {
-        try (InputStream in = BecknMessageBuilderTest.class.getResourceAsStream("/beckn/sample-event-report.json")) {
+    private static JsonNode sample(String name) throws Exception {
+        try (InputStream in = BecknMessageBuilderTest.class.getResourceAsStream("/beckn/" + name)) {
             return BecknJson.MAPPER.readTree(in);
         }
     }
 
+    private static JsonNode sample() throws Exception {
+        return sample("sample-event-report.json");
+    }
+
     private static BecknMessageBuilder builder(EmitterProperties properties) {
-        return new BecknMessageBuilder(properties);
+        return new BecknMessageBuilder(properties, new DefaultResourceLoader());
     }
 
     /** Copies the per-attempt fields (messageId, timestamp) from the sample, after checking their form. */
@@ -90,9 +98,9 @@ class BecknMessageBuilderTest {
     @Test
     void networkIdAndSchemaBaseUrlAndCallerUrlComeFromSettings() {
         EmitterProperties properties = BecknTestSettings.properties();
-        properties.getBeckn().getSelf().setNetworkId("openphc-demo");
+        properties.getBeckn().getSygnal().setNetworkId("openphc-demo");
         properties.getBeckn().setSchemaBaseUrl("https://schemas.example.org/base/");
-        properties.getBeckn().getOnix().setCallerUrl("http://onix:9000/sygnal/caller/");
+        properties.getBeckn().getSygnal().setCallerUrl("http://onix:9000/sygnal/caller/");
         OutgoingMessage msg = builder(properties).eventReport(BecknJson.parse(ENCOUNTER), "ev", "p");
         ObjectNode body = msg.forAttempt();
 
@@ -105,7 +113,7 @@ class BecknMessageBuilderTest {
     @Test
     void withoutFixedTransactionIdEachEventGetsItsOwnUuidKeptAcrossAttempts() {
         EmitterProperties properties = BecknTestSettings.properties();
-        properties.getBeckn().getHie().setTransactionId("");
+        properties.getBeckn().getSygnal().getHie().setTransactionId("");
         BecknMessageBuilder builder = builder(properties);
 
         OutgoingMessage first = builder.eventReport(BecknJson.parse(ENCOUNTER), "ev", "p");
@@ -146,5 +154,62 @@ class BecknMessageBuilderTest {
             Instant occurredAt = Instant.parse(BecknMessageBuilder.occurredAt(resource));
             assertTrue(Duration.between(occurredAt, Instant.now()).abs().toSeconds() < 60, occurredAt.toString());
         }
+    }
+
+    // ---- Spice referral legs (standard Beckn, as on demo-beckn) ----
+
+    @Test
+    void onStatusMatchesSample92() throws Exception {
+        JsonNode sample = sample("sample-on-status.json");
+        JsonNode resource = sample.at("/message/contract/performance/0/performanceAttributes/resource");
+        String eventId = sample.at("/message/contract/performance/0/id").asText();
+
+        OutgoingMessage msg = builder(BecknTestSettings.properties())
+                .peerOnStatus(resource, eventId, "1198503150001234", "COMPLETED");
+
+        assertEquals(Leg.REFERRALS_IN, msg.leg());
+        assertEquals("http://onix-bpp:8082/bpp/caller/on_status", msg.url());
+        assertEquals(sample, normalise(msg.forAttempt(), sample));
+    }
+
+    @Test
+    void referralOutUpdateUsesReferralsOutContract() throws Exception {
+        JsonNode resource = BecknJson.parse("{\"resourceType\":\"ServiceRequest\",\"id\":\"sr9\",\"status\":\"active\","
+                + "\"subject\":{\"reference\":\"Patient/119\"}}");
+        OutgoingMessage msg = builder(BecknTestSettings.properties()).peerReferralUpdate(resource, "ev-1", "119");
+        ObjectNode body = msg.forAttempt();
+
+        assertEquals(Leg.REFERRALS_OUT, msg.leg());
+        assertEquals("http://onix-bap:8081/bap/caller/update", msg.url());
+        assertEquals("update", body.at("/context/action").asText());
+        assertEquals("bap.openmrs.example.org", body.at("/context/bapId").asText());
+        assertEquals("bpp.spice.example.org", body.at("/context/bppId").asText());
+        assertEquals("https://spice.example.org/bpp/receiver", body.at("/context/bppUri").asText());
+        assertEquals("b52a7c3d-0e4f-4b8c-9d2e-3f4a5b6c7d8e", body.at("/context/transactionId").asText());
+        assertEquals("7c3d9e1f-5a2b-4d6c-8e7f-0a1b2c3d4e5f", body.at("/message/contract/id").asText());
+        assertEquals("referral", body.at("/message/contract/commitments/0/id").asText());
+        assertEquals(1, body.at("/message/contract/performance").size());
+        assertEquals("ev-1", body.at("/message/contract/performance/0/id").asText());
+        assertEquals("ServiceRequest/sr9", body.at("/message/contract/performance/0/performanceAttributes/sourceEventId").asText());
+        assertEquals(resource, body.at("/message/contract/performance/0/performanceAttributes/resource"));
+    }
+
+    @Test
+    void referralNetworkIdIsSelfNetworkIdAndLeftOutWhenNotSet() {
+        JsonNode resource = BecknJson.parse(ENCOUNTER);
+        EmitterProperties properties = BecknTestSettings.properties();
+        assertFalse(builder(properties).peerReferralUpdate(resource, "ev", "p").forAttempt().get("context").has("networkId"));
+
+        properties.getBeckn().getSelf().setNetworkId("openphc-demo");
+        assertEquals("openphc-demo",
+                builder(properties).peerReferralUpdate(resource, "ev", "p").forAttempt().at("/context/networkId").asText());
+    }
+
+    @Test
+    void missingCommitmentFileFailsAtStart() {
+        EmitterProperties properties = BecknTestSettings.properties();
+        properties.getBeckn().getSpice().getReferralsIn().setCommitmentFile("classpath:beckn/does-not-exist.json");
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> builder(properties));
+        assertTrue(e.getMessage().contains("emitter.beckn.spice.referrals-in.commitment-file"));
     }
 }

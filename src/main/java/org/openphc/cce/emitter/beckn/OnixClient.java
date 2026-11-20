@@ -21,7 +21,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Posts one Sygnal message to the {@code onix} Sygnal caller and reads the answer
+ * Posts one message to an {@code onix} caller (the Sygnal caller of {@code onix-openmrs} for the CCE
+ * events leg; {@code onix-bap} / {@code onix-bpp} for the Beckn referral legs) and reads the answer
  * (docs/beckn-integration.md § 10). The URL is built as plain text ({@code caller-url + "/" + action}),
  * never with the action as a URI template variable, so the slashes of {@code sygnal/event/report}
  * are not encoded as {@code %2F}. A 5xx, 408, 429, timeout or connection error is retried with

@@ -6,7 +6,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * One log line per Sygnal message when it ends (INFO, or WARN when it failed), and one WARN line
+ * One log line per message when it ends (INFO, or WARN when it failed), and one WARN line
  * per retry (docs/beckn-integration.md § 13.2). Ids and results only: no message body, no patient
  * id, and no resource id (a Patient's id is its national ID).
  */
@@ -35,8 +35,9 @@ public class BecknMessageLog {
                 .append(" action=").append(msg.action())
                 .append(" leg=").append(msg.leg().tag())
                 .append(" messageId=").append(messageId)
-                .append(" transactionId=").append(msg.transactionId())
-                .append(" eventId=").append(msg.eventId())
+                .append(" transactionId=").append(msg.transactionId());
+        if (msg.contractId() != null) sb.append(" contractId=").append(msg.contractId()); // Beckn referral legs only
+        sb.append(" eventId=").append(msg.eventId())
                 .append(" resourceType=").append(msg.resourceType())
                 .append(" attempt=").append(attempt)
                 .append(" result=").append(answer.result());

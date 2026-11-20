@@ -19,10 +19,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Beckn mode only: checks that the Sygnal caller of this emitter's onix ({@code onix-openmrs}) is
- * reachable, by a GET to {@code {caller-url}/sygnal/event/report}. Any HTTP answer counts as
- * reachable (the caller takes only POST); no answer means DOWN. Nothing is checked when the
- * {@code cce-events} leg is off. Replaces the OpenHIM check, which is not on the Beckn path.
+ * Beckn mode only: checks that the onix callers the emitter posts to are reachable: the Sygnal caller
+ * of {@code onix-openmrs} ({@code {sygnal.caller-url}/sygnal/event/report}, CCE events leg), and the
+ * Beckn callers {@code onix-bap} ({@code /update}, referrals out) and {@code onix-bpp}
+ * ({@code /on_status}, referrals in). Any HTTP answer counts as reachable (the callers take only
+ * POST); no answer means DOWN. Only the callers of the legs that are on are checked. Replaces the
+ * OpenHIM check, which is not on the Beckn path.
  */
 @Component("onix")
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)
@@ -52,7 +54,13 @@ public class OnixHealthIndicator implements HealthIndicator {
         BecknConfig beckn = properties.getBeckn();
         Map<String, String> targets = new LinkedHashMap<>();
         if (beckn.getLegs().isCceEvents()) {
-            targets.put("caller", strip(beckn.getOnix().getCallerUrl()) + "/" + BecknMessageBuilder.ACTION_EVENT_REPORT);
+            targets.put("sygnal", strip(beckn.getSygnal().getCallerUrl()) + "/" + BecknMessageBuilder.ACTION_EVENT_REPORT);
+        }
+        if (beckn.getLegs().isReferralsOut()) {
+            targets.put("bap", strip(beckn.getOnix().getBapCallerUrl()) + "/update");
+        }
+        if (beckn.getLegs().isReferralsIn()) {
+            targets.put("bpp", strip(beckn.getOnix().getBppCallerUrl()) + "/on_status");
         }
         Health.Builder builder = Health.up();
         for (Map.Entry<String, String> target : targets.entrySet()) {

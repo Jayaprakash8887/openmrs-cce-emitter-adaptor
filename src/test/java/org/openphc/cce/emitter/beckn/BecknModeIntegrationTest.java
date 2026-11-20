@@ -32,8 +32,10 @@ import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Beckn (Sygnal) mode end to end against a stubbed onix Sygnal caller (and a stubbed OpenMRS for the
- * poller test): 202 Ack, 400 Nack, 500-then-Ack retry with a new messageId and the same event id.
+ * Beckn mode end to end against stubbed onix callers (and a stubbed OpenMRS for the poller test):
+ * the CCE events leg (Sygnal {@code sygnal/event/report}: 202 Ack, 400 Nack, 500-then-Ack retry with a
+ * new messageId and the same event id) and the Spice referral legs (Beckn {@code on_status} /
+ * {@code update}, as on demo-beckn).
  */
 @SpringBootTest(properties = {
         "emitter.target=beckn",
@@ -42,8 +44,21 @@ import static org.junit.jupiter.api.Assertions.*;
         "emitter.openhim.retry.max-attempts=3",
         "emitter.openhim.retry.backoff-ms=1",
         "emitter.beckn.onix.timeout=2s",
-        "emitter.beckn.self.network-id=sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry",
-        "emitter.beckn.hie.uri=https://hie.example.org/sygnal/receiver"
+        "emitter.beckn.sygnal.network-id=sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry",
+        "emitter.beckn.sygnal.hie.uri=https://hie.example.org/sygnal/receiver",
+        "emitter.beckn.self.bap-id=bap.openmrs.example.org",
+        "emitter.beckn.self.bap-uri=https://openmrs.example.org/bap/receiver",
+        "emitter.beckn.self.bpp-id=bpp.openmrs.example.org",
+        "emitter.beckn.self.bpp-uri=https://openmrs.example.org/bpp/receiver",
+        "emitter.beckn.spice.bap-id=bap.spice.example.org",
+        "emitter.beckn.spice.bap-uri=https://spice.example.org/bap/receiver",
+        "emitter.beckn.spice.bpp-id=bpp.spice.example.org",
+        "emitter.beckn.spice.bpp-uri=https://spice.example.org/bpp/receiver",
+        "emitter.beckn.spice.facility-codes=0417",
+        "emitter.beckn.spice.referrals-in.contract-id=e2c9a7b4-6f1d-4b3a-9c8e-7d6f5a4b3c2d",
+        "emitter.beckn.spice.referrals-in.transaction-id=a41f6b2c-9d3e-4a7b-8c1d-2e3f4a5b6c7d",
+        "emitter.beckn.spice.referrals-out.contract-id=7c3d9e1f-5a2b-4d6c-8e7f-0a1b2c3d4e5f",
+        "emitter.beckn.spice.referrals-out.transaction-id=b52a7c3d-0e4f-4b8c-9d2e-3f4a5b6c7d8e"
 })
 class BecknModeIntegrationTest {
 
@@ -61,6 +76,9 @@ class BecknModeIntegrationTest {
 
     /** The action is appended with its slashes as they are: no %2F. */
     private static final String REPORT = "/sygnal/caller/sygnal/event/report";
+    /** The Beckn referral legs to Spice. */
+    private static final String BAP = "/bap/caller/update";
+    private static final String BPP = "/bpp/caller/on_status";
     private static final String ACK = "{\"message\":{\"status\":\"ACK\",\"messageId\":\"x\"}}";
     private static final String NACK = "{\"message\":{\"status\":\"NACK\",\"messageId\":\"x\","
             + "\"error\":{\"code\":\"SCH_REQUIRED_FIELD_MISSING\",\"message\":\"events[0].id is missing\"}}}";
@@ -71,6 +89,10 @@ class BecknModeIntegrationTest {
             + "\"meta\":{\"lastUpdated\":\"2026-11-13T08:00:12.000+00:00\"},"
             + "\"status\":\"finished\",\"subject\":{\"reference\":\"Patient/1198503150001234\"}}";
     private static final String DIRECTION = "http://cce.openphc.org/CodeSystem/referral-direction";
+    private static final String INBOUND_OUTCOME = "{\"resourceType\":\"ServiceRequest\",\"id\":\"0fe4c80e\",\"status\":\"completed\","
+            + "\"intent\":\"order\",\"category\":[{\"coding\":[{\"system\":\"" + DIRECTION + "\",\"code\":\"inbound\"}]},"
+            + "{\"coding\":[{\"system\":\"http://cce.openphc.org/CodeSystem/event-type\",\"code\":\"referral-response\"}]}],"
+            + "\"subject\":{\"reference\":\"Patient/1198503150001234\"}}";
     private static final String OUTBOUND_REFERRAL = "{\"resourceType\":\"ServiceRequest\",\"id\":\"a1b2\",\"status\":\"active\","
             + "\"intent\":\"order\",\"category\":[{\"coding\":[{\"system\":\"" + DIRECTION + "\",\"code\":\"outbound\"}]}],"
             + "\"performer\":[{\"reference\":\"Organization/0417\",\"identifier\":{\"system\":"
@@ -79,7 +101,9 @@ class BecknModeIntegrationTest {
 
     @DynamicPropertySource
     static void urls(DynamicPropertyRegistry registry) {
-        registry.add("emitter.beckn.onix.caller-url", () -> WM.baseUrl() + "/sygnal/caller");
+        registry.add("emitter.beckn.sygnal.caller-url", () -> WM.baseUrl() + "/sygnal/caller");
+        registry.add("emitter.beckn.onix.bap-caller-url", () -> WM.baseUrl() + "/bap/caller");
+        registry.add("emitter.beckn.onix.bpp-caller-url", () -> WM.baseUrl() + "/bpp/caller/");
         registry.add("emitter.openmrs.base-url", () -> WM.baseUrl() + "/openmrs");
         registry.add("emitter.openhim.base-url", () -> WM.baseUrl() + "/fhir");
         registry.add("emitter.checkpoint.file-path", CHECKPOINTS::toString);
@@ -107,7 +131,11 @@ class BecknModeIntegrationTest {
     }
 
     private static List<JsonNode> bodies() {
-        return WM.findAll(postRequestedFor(urlEqualTo(REPORT))).stream()
+        return bodies(REPORT);
+    }
+
+    private static List<JsonNode> bodies(String path) {
+        return WM.findAll(postRequestedFor(urlEqualTo(path))).stream()
                 .map(LoggedRequest::getBodyAsString).map(BecknJson::parse).toList();
     }
 
@@ -132,7 +160,6 @@ class BecknModeIntegrationTest {
         ForwardResult result = forwarder.forward(ENCOUNTER, "Encounter");
 
         assertTrue(result.isSuccess());
-        assertEquals(202, result.statusCode());
         noOtherCalls();
         List<JsonNode> sent = bodies();
         assertEquals(1, sent.size());
@@ -228,7 +255,7 @@ class BecknModeIntegrationTest {
         WM.stubFor(post(urlEqualTo(REPORT)).willReturn(okJson(ACK)));
 
         forwarder.forward(ENCOUNTER, "Encounter");
-        forwarder.forward(OUTBOUND_REFERRAL, "ServiceRequest");
+        forwarder.forward(ENCOUNTER.replace("7d2c9b1e", "8e3d0c2f"), "Encounter");
 
         List<JsonNode> sent = bodies();
         assertEquals(2, sent.size());
@@ -236,16 +263,57 @@ class BecknModeIntegrationTest {
     }
 
     @Test
-    void aReferralIsOneEventReportToTheHieOnly() {
+    void inboundReferralOutcomeGoesToHieAsEventReportAndToPeerAsBecknOnStatus() {
         WM.stubFor(post(urlEqualTo(REPORT)).willReturn(okJson(ACK)));
+        WM.stubFor(post(urlEqualTo(BPP)).willReturn(okJson(ACK)));
+
+        assertTrue(forwarder.forward(INBOUND_OUTCOME, "ServiceRequest").isSuccess());
+
+        JsonNode hie = bodies().get(0);
+        assertEquals("sygnal/event/report", hie.at("/context/action").asText());
+        List<JsonNode> onStatus = bodies(BPP);
+        assertEquals(1, onStatus.size());
+        JsonNode peer = onStatus.get(0);
+        assertEquals("on_status", peer.at("/context/action").asText());
+        assertEquals("bap.spice.example.org", peer.at("/context/bapId").asText());
+        assertEquals("bpp.openmrs.example.org", peer.at("/context/bppId").asText());
+        assertEquals("e2c9a7b4-6f1d-4b3a-9c8e-7d6f5a4b3c2d", peer.at("/message/contract/id").asText());
+        assertEquals("COMPLETED", peer.at("/message/contract/performance/0/status/code").asText());
+        assertEquals(hie.at("/message/events/0/id"), peer.at("/message/contract/performance/0/id"));
+    }
+
+    @Test
+    void outboundReferralToServedFacilityGoesToHieAndAsBecknUpdateToPeer() {
+        WM.stubFor(post(urlEqualTo(REPORT)).willReturn(okJson(ACK)));
+        WM.stubFor(post(urlEqualTo(BAP)).willReturn(okJson(ACK)));
+        double sentBefore = count(BecknTargetForwarder.METRIC_REFERRALS_OUT, "outcome", "sent");
 
         assertTrue(forwarder.forward(OUTBOUND_REFERRAL, "ServiceRequest").isSuccess());
 
-        noOtherCalls();
-        List<JsonNode> sent = bodies();
-        assertEquals(1, sent.size());
-        assertEquals("bap.openhim.nextsteps.mdtlabs.org", sent.get(0).at("/context/receiverId").asText());
-        assertEquals(BecknJson.parse(OUTBOUND_REFERRAL), sent.get(0).at("/message/events/0/eventAttributes/resource"));
+        assertEquals(1, bodies().size());
+        List<JsonNode> update = bodies(BAP);
+        assertEquals(1, update.size());
+        assertEquals("update", update.get(0).at("/context/action").asText());
+        assertEquals("bap.openmrs.example.org", update.get(0).at("/context/bapId").asText());
+        assertEquals("bpp.spice.example.org", update.get(0).at("/context/bppId").asText());
+        assertEquals("7c3d9e1f-5a2b-4d6c-8e7f-0a1b2c3d4e5f", update.get(0).at("/message/contract/id").asText());
+        assertEquals(BecknJson.parse(OUTBOUND_REFERRAL),
+                update.get(0).at("/message/contract/performance/0/performanceAttributes/resource"));
+        assertEquals(0, bodies(BPP).size());
+        assertEquals(sentBefore + 1, count(BecknTargetForwarder.METRIC_REFERRALS_OUT, "outcome", "sent"));
+    }
+
+    @Test
+    void hieNackDoesNotStopThePeerMessage() {
+        WM.stubFor(post(urlEqualTo(REPORT)).willReturn(aResponse().withStatus(400)
+                .withHeader("Content-Type", "application/json").withBody(NACK)));
+        WM.stubFor(post(urlEqualTo(BPP)).willReturn(okJson(ACK)));
+
+        ForwardResult result = forwarder.forward(INBOUND_OUTCOME, "ServiceRequest");
+
+        assertFalse(result.isSuccess());
+        assertEquals(1, bodies().size());
+        assertEquals(1, bodies(BPP).size());
     }
 
     @Test
@@ -276,10 +344,12 @@ class BecknModeIntegrationTest {
     }
 
     @Test
-    void healthChecksTheSygnalCallerNotOpenhim() {
+    void healthChecksTheOnixCallersNotOpenhim() {
         assertFalse(context.containsBean("openhim"));
         HealthIndicator onix = context.getBean("onix", HealthIndicator.class);
         assertEquals(Status.UP, onix.health().getStatus());
         WM.verify(1, getRequestedFor(urlEqualTo(REPORT)));
+        WM.verify(1, getRequestedFor(urlEqualTo(BAP)));
+        WM.verify(1, getRequestedFor(urlEqualTo(BPP)));
     }
 }

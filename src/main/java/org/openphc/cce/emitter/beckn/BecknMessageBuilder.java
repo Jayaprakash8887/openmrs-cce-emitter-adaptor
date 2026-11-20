@@ -4,9 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.openphc.cce.emitter.config.EmitterProperties;
 import org.openphc.cce.emitter.config.EmitterProperties.BecknConfig;
+import org.openphc.cce.emitter.config.EmitterProperties.BecknContractConfig;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
@@ -14,34 +19,54 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
- * Builds the Sygnal message of the emitter, {@code sygnal/event/report} to the HIE
- * (docs/beckn-integration.md § 8–9), from the settings: {@code context} and one
- * {@code sygnal:CoordinationEvent} whose {@code eventAttributes} is the {@code CceClinicalEvent} box.
- * The event id is the {@code CoordinationEvent} id. There is no contract and no commitment.
+ * Builds the messages of the emitter (docs/beckn-integration.md § 8–9), from the settings:
+ *
+ * <ul>
+ *   <li>the CCE events leg: the Sygnal action {@code sygnal/event/report} to the HIE, with one
+ *       {@code sygnal:CoordinationEvent} whose {@code eventAttributes} is the {@code CceClinicalEvent}
+ *       box. No contract, no commitment;</li>
+ *   <li>the Spice referral legs (standard Beckn): {@code on_status} and {@code update}, with
+ *       {@code context}, {@code message.contract} and one performance entry whose
+ *       {@code performanceAttributes} is the same box. The referral commitment files are read once,
+ *       at start.</li>
+ * </ul>
+ * On every leg the event id is the id of the one event / performance entry.
  */
 @Component
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)
 public class BecknMessageBuilder {
 
     public static final String VERSION = "2.0.0";
+    public static final String EVENT_TYPE = "cce:CceClinicalEvent";
+    public static final String FHIR_VERSION = "4.0.1";
+    public static final String ACTION_UPDATE = "update";
+    public static final String ACTION_ON_STATUS = "on_status";
     public static final String ACTION_EVENT_REPORT = "sygnal/event/report";
     public static final String COORDINATION_EVENT_TYPE = "sygnal:CoordinationEvent";
     public static final String SYGNAL_EVENT_TYPE = "DELIVERY_RECORDED";
     public static final String GRANULARITY = "INDIVIDUAL";
     public static final String ROLE = "PROVIDER";
-    public static final String EVENT_TYPE = "cce:CceClinicalEvent";
-    public static final String FHIR_VERSION = "4.0.1";
 
     private final BecknConfig beckn;
+    private final JsonNode referralsInCommitment;
+    private final JsonNode referralsOutCommitment;
 
-    public BecknMessageBuilder(EmitterProperties properties) {
+    public BecknMessageBuilder(EmitterProperties properties, ResourceLoader resourceLoader) {
         this.beckn = properties.getBeckn();
+        this.referralsInCommitment = beckn.getLegs().isReferralsIn()
+                ? loadCommitment(resourceLoader, beckn.getSpice().getReferralsIn().getCommitmentFile(),
+                        "emitter.beckn.spice.referrals-in.commitment-file")
+                : null;
+        this.referralsOutCommitment = beckn.getLegs().isReferralsOut()
+                ? loadCommitment(resourceLoader, beckn.getSpice().getReferralsOut().getCommitmentFile(),
+                        "emitter.beckn.spice.referrals-out.commitment-file")
+                : null;
     }
 
-    /** {@code sygnal/event/report} to the HIE, posted to this emitter's onix Sygnal caller. */
+    /** Sygnal {@code sygnal/event/report} to the HIE, posted to this emitter's onix Sygnal caller. */
     public OutgoingMessage eventReport(JsonNode resource, String eventId, String patientId) {
-        var self = beckn.getSelf();
-        var hie = beckn.getHie();
+        var sygnal = beckn.getSygnal();
+        var hie = sygnal.getHie();
         String transactionId = isBlank(hie.getTransactionId())
                 ? UUID.randomUUID().toString()
                 : hie.getTransactionId().trim();
@@ -50,8 +75,8 @@ public class BecknMessageBuilder {
         ObjectNode context = root.putObject("context");
         context.put("version", VERSION);
         context.put("action", ACTION_EVENT_REPORT);
-        context.put("networkId", self.getNetworkId());
-        context.put("senderId", self.getId());
+        context.put("networkId", sygnal.getNetworkId());
+        context.put("senderId", sygnal.getId());
         context.put("receiverId", hie.getId());
         context.put("receiverUri", hie.getUri());
         context.put("transactionId", transactionId);
@@ -66,17 +91,73 @@ public class BecknMessageBuilder {
         event.put("eventType", SYGNAL_EVENT_TYPE);
         event.put("granularity", GRANULARITY);
         ObjectNode from = event.putObject("from");
-        from.put("id", self.getId());
+        from.put("id", sygnal.getId());
         from.put("role", ROLE);
         event.put("occurredAt", occurredAt(resource));
         event.set("eventAttributes", clinicalEvent(resource, patientId));
 
-        String url = stripTrailingSlash(beckn.getOnix().getCallerUrl()) + "/" + ACTION_EVENT_REPORT;
-        return new OutgoingMessage(Leg.CCE_EVENTS, ACTION_EVENT_REPORT, url, root, eventId,
-                BecknJson.text(resource, "resourceType"), transactionId);
+        return message(Leg.CCE_EVENTS, ACTION_EVENT_REPORT, sygnal.getCallerUrl(), root, eventId, resource,
+                transactionId, null);
     }
 
-    /** The {@code cce:CceClinicalEvent} box, unchanged from the Beckn {@code performanceAttributes}. */
+    /** {@code on_status} on the "referrals in" contract (OpenMRS is the provider), to {@code onix-bpp}. */
+    public OutgoingMessage peerOnStatus(JsonNode resource, String eventId, String patientId, String performanceStatus) {
+        var peer = beckn.getSpice();
+        var self = beckn.getSelf();
+        BecknContractConfig contract = peer.getReferralsIn();
+        ObjectNode context = context(ACTION_ON_STATUS, peer.getBapId(), peer.getBapUri(),
+                self.getBppId(), self.getBppUri(), contract.getTransactionId());
+        ObjectNode performance = performance(eventId, performanceStatus, resource, patientId);
+        ObjectNode body = envelope(context, contract.getContractId(), true, referralsInCommitment, performance);
+        return message(Leg.REFERRALS_IN, ACTION_ON_STATUS, beckn.getOnix().getBppCallerUrl(), body, eventId,
+                resource, contract.getTransactionId(), contract.getContractId());
+    }
+
+    /** {@code update} on the "referrals out" contract (the peer is the provider), to {@code onix-bap}. */
+    public OutgoingMessage peerReferralUpdate(JsonNode resource, String eventId, String patientId) {
+        var peer = beckn.getSpice();
+        var self = beckn.getSelf();
+        BecknContractConfig contract = peer.getReferralsOut();
+        ObjectNode context = context(ACTION_UPDATE, self.getBapId(), self.getBapUri(),
+                peer.getBppId(), peer.getBppUri(), contract.getTransactionId());
+        ObjectNode performance = performance(eventId, null, resource, patientId);
+        ObjectNode body = envelope(context, contract.getContractId(), false, referralsOutCommitment, performance);
+        return message(Leg.REFERRALS_OUT, ACTION_UPDATE, beckn.getOnix().getBapCallerUrl(), body, eventId,
+                resource, contract.getTransactionId(), contract.getContractId());
+    }
+
+    /** Beckn {@code context} of the referral legs. */
+    private ObjectNode context(String action, String bapId, String bapUri, String bppId, String bppUri,
+                               String transactionId) {
+        ObjectNode context = BecknJson.MAPPER.createObjectNode();
+        context.put("version", VERSION);
+        context.put("action", action);
+        String networkId = beckn.getSelf().getNetworkId();
+        if (networkId != null && !networkId.isBlank()) {
+            context.put("networkId", networkId);
+        }
+        context.put("bapId", bapId);
+        context.put("bapUri", bapUri);
+        context.put("bppId", bppId);
+        context.put("bppUri", bppUri);
+        context.put("transactionId", transactionId);
+        // replaced on every attempt by OutgoingMessage.forAttempt()
+        context.put("messageId", UUID.randomUUID().toString());
+        context.put("timestamp", now());
+        return context;
+    }
+
+    private ObjectNode performance(String eventId, String status, JsonNode resource, String patientId) {
+        ObjectNode performance = BecknJson.MAPPER.createObjectNode();
+        performance.put("id", eventId);
+        if (status != null) {
+            performance.putObject("status").put("code", status);
+        }
+        performance.set("performanceAttributes", clinicalEvent(resource, patientId));
+        return performance;
+    }
+
+    /** The {@code cce:CceClinicalEvent} box: {@code eventAttributes} (Sygnal) or {@code performanceAttributes} (Beckn). */
     private ObjectNode clinicalEvent(JsonNode resource, String patientId) {
         ObjectNode attrs = BecknJson.MAPPER.createObjectNode();
         attrs.put("@context", stripTrailingSlash(beckn.getSchemaBaseUrl()) + "/CceClinicalEvent/v1.0/context.jsonld");
@@ -93,12 +174,33 @@ public class BecknMessageBuilder {
         return attrs;
     }
 
+    private static ObjectNode envelope(ObjectNode context, String contractId, boolean withContractStatus,
+                                       JsonNode commitment, ObjectNode performance) {
+        ObjectNode root = BecknJson.MAPPER.createObjectNode();
+        root.set("context", context);
+        ObjectNode contract = root.putObject("message").putObject("contract");
+        contract.put("id", contractId);
+        if (withContractStatus) {
+            contract.putObject("status").put("code", "ACTIVE");
+        }
+        contract.putArray("commitments").add(commitment.deepCopy());
+        contract.putArray("performance").add(performance);
+        return root;
+    }
+
+    /** The URL is plain text, so the slashes of a Sygnal action are never encoded. */
+    private static OutgoingMessage message(Leg leg, String action, String callerUrl, ObjectNode body, String eventId,
+                                           JsonNode resource, String transactionId, String contractId) {
+        return new OutgoingMessage(leg, action, stripTrailingSlash(callerUrl) + "/" + action, body, eventId,
+                BecknJson.text(resource, "resourceType"), transactionId, contractId);
+    }
+
     /**
-     * When the event happened: {@code meta.lastUpdated} of the resource, i.e. when OpenMRS recorded
-     * this version of it (the version the event id is the hash of), as a UTC instant. Falls back to
-     * the time the message is built when it is missing or not a full timestamp. The time of the
-     * clinical act itself (for example {@code Encounter.period.start}) stays in the resource; CCE
-     * reads it from there for its schedules.
+     * When the event happened (Sygnal {@code occurredAt}): {@code meta.lastUpdated} of the resource,
+     * i.e. when OpenMRS recorded this version of it (the version the event id is the hash of), as a
+     * UTC instant. Falls back to the time the message is built when it is missing or not a full
+     * timestamp. The time of the clinical act itself (for example {@code Encounter.period.start})
+     * stays in the resource; CCE reads it from there for its schedules.
      */
     static String occurredAt(JsonNode resource) {
         String lastUpdated = BecknJson.text(resource == null ? null : resource.path("meta"), "lastUpdated");
@@ -110,6 +212,24 @@ public class BecknMessageBuilder {
             }
         }
         return now();
+    }
+
+    static JsonNode loadCommitment(ResourceLoader loader, String location, String setting) {
+        if (location == null || location.isBlank()) {
+            throw new IllegalStateException("Beckn setting " + setting + " is not set");
+        }
+        Resource resource = loader.getResource(location);
+        try (InputStream in = resource.getInputStream()) {
+            JsonNode node = BecknJson.MAPPER.readTree(in);
+            if (node == null || !node.isObject() || BecknJson.text(node, "id") == null) {
+                throw new IllegalStateException("Commitment file " + location + " (" + setting
+                        + ") must hold a JSON object with an \"id\"");
+            }
+            return node;
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot read commitment file " + location + " (" + setting + "): "
+                    + e.getMessage(), e);
+        }
     }
 
     private static String now() {
