@@ -7,9 +7,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
- * One Beckn message ready to post. {@link #forAttempt()} gives the body for one attempt: a copy
- * with a new {@code context.messageId} and {@code context.timestamp}; the performance id (the
- * event id) never changes.
+ * One message ready to post. {@link #forAttempt()} gives the body for one attempt: a copy with a new
+ * {@code context.messageId} and {@code context.timestamp}; the event id (Sygnal
+ * {@code message.events[0].id}, Beckn performance id) never changes. {@code contractId} is null on
+ * the Sygnal leg, which has no contract.
  */
 public record OutgoingMessage(Leg leg, String action, String url, ObjectNode body,
                               String eventId, String resourceType, String transactionId, String contractId) {

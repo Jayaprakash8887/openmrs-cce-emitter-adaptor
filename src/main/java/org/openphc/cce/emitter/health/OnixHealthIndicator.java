@@ -1,5 +1,6 @@
 package org.openphc.cce.emitter.health;
 
+import org.openphc.cce.emitter.beckn.BecknMessageBuilder;
 import org.openphc.cce.emitter.config.EmitterProperties;
 import org.openphc.cce.emitter.config.EmitterProperties.BecknConfig;
 import org.springframework.boot.actuate.health.Health;
@@ -18,10 +19,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Beckn mode only: checks that the {@code openmrs-onix} callers the emitter posts to are reachable.
- * Any HTTP answer counts as reachable (the callers take only POST); no answer means DOWN. Only the
- * callers of the legs that are on are checked. Replaces the OpenHIM check, which is not on the
- * Beckn path.
+ * Beckn mode only: checks that the onix callers the emitter posts to are reachable: the Sygnal caller
+ * of {@code onix-openmrs} ({@code {sygnal.caller-url}/sygnal/event/report}, CCE events leg), and the
+ * Beckn callers {@code onix-bap} ({@code /update}, referrals out) and {@code onix-bpp}
+ * ({@code /on_status}, referrals in). Any HTTP answer counts as reachable (the callers take only
+ * POST); no answer means DOWN. Only the callers of the legs that are on are checked. Replaces the
+ * OpenHIM check, which is not on the Beckn path.
  */
 @Component("onix")
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)
@@ -50,7 +53,10 @@ public class OnixHealthIndicator implements HealthIndicator {
     public Health health() {
         BecknConfig beckn = properties.getBeckn();
         Map<String, String> targets = new LinkedHashMap<>();
-        if (beckn.getLegs().isCceEvents() || beckn.getLegs().isReferralsOut()) {
+        if (beckn.getLegs().isCceEvents()) {
+            targets.put("sygnal", strip(beckn.getSygnal().getCallerUrl()) + "/" + BecknMessageBuilder.ACTION_EVENT_REPORT);
+        }
+        if (beckn.getLegs().isReferralsOut()) {
             targets.put("bap", strip(beckn.getOnix().getBapCallerUrl()) + "/update");
         }
         if (beckn.getLegs().isReferralsIn()) {

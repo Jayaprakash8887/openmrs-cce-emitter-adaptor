@@ -74,45 +74,56 @@ volumes:
 
 ## Beckn Mode
 
-> **Status:** Implemented on branch `demo-beckn` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. See [beckn-integration.md](beckn-integration.md).
+> **Status:** Implemented on branch `sygnal-actions` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. See [beckn-integration.md](beckn-integration.md).
 
-With `OPENMRS_EMITTER_TARGET=openhim` the deployment above is all that is needed. On the `demo-beckn` branch the default is `beckn`, so set `OPENMRS_EMITTER_TARGET=openhim` explicitly to deploy without Beckn. Beckn mode adds the two `openmrs-onix` adapter containers and their Redis, as an optional group.
+With `OPENMRS_EMITTER_TARGET=openhim` the deployment above is all that is needed. On this branch the default is `beckn`, so set `OPENMRS_EMITTER_TARGET=openhim` explicitly to deploy without Beckn. Beckn mode adds the onix adapter containers and their Redis, as an optional group: OpenMRS's Sygnal onix (`onix-openmrs`) for the CCE events leg, and the two Beckn `openmrs-onix` containers (`onix-bap`, `onix-bpp`) for the Spice referral legs, unchanged.
 
 | Container | Role | Port on `cce-net` | Host port on the dev host |
 |-----------|------|-------------------|---------------------------|
 | `openmrs-cce-emitter-adaptor` | Emitter | `8085` | `8099` |
-| `onix-bap` | OpenMRS as consumer. Caller `/bap/caller` | `8081` | `8181` |
-| `onix-bpp` | OpenMRS as provider. Caller `/bpp/caller` | `8082` | `8182` |
+| `onix-openmrs` | Sygnal: CCE events leg. Caller `/sygnal/caller/` (sends `sygnal/event/report`), receiver `/sygnal/receiver/` (public) | `8082` | a free port, e.g. `8282` |
+| `onix-bap` | Beckn: OpenMRS as consumer (referrals out). Caller `/bap/caller` | `8081` | `8181` |
+| `onix-bpp` | Beckn: OpenMRS as provider (referrals in). Caller `/bpp/caller` | `8082` | `8182` |
 | Redis for onix | Adapter's short-lived data | — | not published |
 
 - All of them join the `cce-net` Docker network. The emitter calls the onix containers by name, on their own ports.
-- On the dev host, host ports `8081` (`keycloak`) and `8082` (`cce-openhim-core`) are taken. Publish the onix containers on `8181` and `8182`. Inside `cce-net` they keep `8081` and `8082`.
-- Both onix receiver routings point at the receiver adaptor, not at the emitter.
+- On the dev host, host ports `8081` (`keycloak`) and `8082` (`cce-openhim-core`) are taken. Publish `onix-bap` and `onix-bpp` on `8181` and `8182`, and `onix-openmrs` on another free one (e.g. `8282`). Inside `cce-net` they keep their own ports.
+- The receiver routings of the onix containers point at the receiver adaptor, not at the emitter.
+- The HIE's onix receiver (`https://<hie-host>/sygnal/receiver`) must be reachable from `onix-openmrs`; it is the emitter's `OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI`.
 
 Extra emitter environment:
 
 ```yaml
     environment:
       OPENMRS_EMITTER_TARGET: beckn
+      OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL: https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema
+      # CCE events leg (Sygnal)
+      OPENMRS_EMITTER_BECKN_SYGNAL_CALLER_URL: http://onix-openmrs:8082/sygnal/caller
+      OPENMRS_EMITTER_BECKN_SYGNAL_ID: bap.openmrs.nextsteps.mdtlabs.org
+      OPENMRS_EMITTER_BECKN_SYGNAL_NETWORK_ID: sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry
+      OPENMRS_EMITTER_BECKN_SYGNAL_HIE_ID: bap.openhim.nextsteps.mdtlabs.org
+      OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI: https://<hie-host>/sygnal/receiver
+      # Spice referral legs (Beckn)
       OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL: http://onix-bap:8081/bap/caller
       OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL: http://onix-bpp:8082/bpp/caller
-      OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL: https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema
       OPENHIM_RETRY_MAX_ATTEMPTS: "6"
     networks:
       - cce-net
 ```
 
-The Beckn ids, contract ids and facility codes go in YAML ([configuration-guide.md](configuration-guide.md)).
+The Beckn ids, contract ids and facility codes of the referral legs go in YAML or `OPENMRS_EMITTER_BECKN_*` variables ([configuration-guide.md](configuration-guide.md)).
 
 ### Beckn Mode Checklist
 
-- [ ] `onix-bap` and `onix-bpp` are running on `cce-net` and reachable from the emitter
-- [ ] Both onix containers have OpenMRS's own Beckn ids and keys, and the `CceClinicalEvent` schema (from the cce-beckn-service `schema/` folder)
-- [ ] `responseHeaderTimeout` on `onix-bap` is raised from the 5 s default to at least 45 s, and the emitter's `emitter.beckn.onix.timeout` is 50 s ([beckn-integration.md](beckn-integration.md) § 10.4)
-- [ ] A HIE feed contract id and `transactionId` are set in `emitter.beckn.openhim` (any stable non-blank ids; OpenHIM does not match them)
+- [ ] `onix-openmrs`, `onix-bap` and `onix-bpp` are running on `cce-net` and reachable from the emitter
+- [ ] `onix-openmrs` holds OpenMRS's keys for subscriber id `bap.openmrs.nextsteps.mdtlabs.org` (= `OPENMRS_EMITTER_BECKN_SYGNAL_ID`), the CCE Sygnal profile and the `CceClinicalEvent` schema (from the cce-beckn-service `schema/` folder)
+- [ ] `onix-bap` and `onix-bpp` have OpenMRS's own Beckn ids and keys, and the `CceClinicalEvent` schema
+- [ ] `OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI` is set (the emitter does not start in Beckn mode without it)
+- [ ] `responseHeaderTimeout` on `onix-openmrs` and `onix-bap` is raised from the 5 s default to at least 45 s, and the emitter's `emitter.beckn.onix.timeout` is 50 s ([beckn-integration.md](beckn-integration.md) § 10.4)
 - [ ] The "referrals in" and "referrals out" ids are agreed with Spice and set in `emitter.beckn.spice`
 - [ ] Spice's facility codes are set in `emitter.beckn.spice.facility-codes`
 - [ ] `OPENMRS_EMITTER_TARGET=beckn` is set, and the emitter is restarted
+- [ ] The old Beckn HIE-feed variables (`OPENMRS_EMITTER_BECKN_OPENHIM_*`) are removed from the env file (they are ignored)
 
 ---
 

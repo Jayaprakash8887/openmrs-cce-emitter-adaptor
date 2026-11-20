@@ -1,158 +1,100 @@
 # Beckn Integration — OpenMRS CCE Emitter Adaptor
 
-**Status:** Implemented on branch `demo-beckn` (package `org.openphc.cce.emitter.beckn`), with unit tests and a stubbed-onix integration test. Not yet tested against real onix containers. Where the build settled a point the proposal left open, the text below says so (§6, §10.1, §11, §13, §14).
+**Status:** Implemented on branch `sygnal-actions` (package `org.openphc.cce.emitter.beckn`), with unit tests and a stubbed-onix integration test. Not yet tested against real onix containers.
 
-This document describes the emitter's part in the Beckn design. The full design, for all OpenMRS components, is the central document **"Design: Beckn support for OpenMRS"** in the `openmrs-beckn-service` repository. Section numbers in brackets, such as (§4.5), point to that document.
+In Beckn mode the emitter sends on three legs, with **two protocols**:
 
-With `OPENMRS_EMITTER_TARGET=openhim` (the default) nothing in this document applies. The emitter posts FHIR to OpenHIM exactly as it does today.
+| Leg | Protocol | Message | To | Through |
+|---|---|---|---|---|
+| CCE events (`cce-events`) | **Sygnal** | `sygnal/event/report` | The HIE (OpenHIM), which passes it on to CCE | `onix-openmrs` Sygnal caller |
+| Referrals in (`referrals-in`) | **Beckn**, unchanged from `demo-beckn` | `on_status` | Spice | `onix-bpp` |
+| Referrals out (`referrals-out`) | **Beckn**, unchanged from `demo-beckn` | `update` | Spice | `onix-bap` |
+
+The CCE events leg follows the CCE profile of Sygnal, `schema/sygnal-profile/v1.0/cce-sygnal-apis.yaml` in the cce-beckn-service repository; that file is the binding contract between OpenMRS, the HIE and CCE. The Beckn `update` on the "HIE feed" contract, its commitment file and its `openhim.*` settings are gone. The Spice referral legs are standard Beckn and behave exactly as on `demo-beckn`: same messages, contracts, settings and metrics. The central design for them is **"Design: Beckn support for OpenMRS"** in the `openmrs-beckn-service` repository; section numbers in brackets, such as (§4.5), point to that document.
+
+With `OPENMRS_EMITTER_TARGET=openhim` nothing in this document applies. The emitter posts FHIR to OpenHIM exactly as it does today.
 
 ---
 
 ## 1. Summary
 
-- A new setting, `OPENMRS_EMITTER_TARGET`, chooses the path: `beckn` (the default on the `demo-beckn` branch) or `openhim` (today's path).
-- In `beckn` mode the emitter posts Beckn messages to the `openmrs-onix` adapter containers instead of FHIR to OpenHIM.
-- Every changed resource goes to the HIE as one `update`. The HIE passes it on to CCE.
-- A referral `ServiceRequest` can also lead to one message to Spice: `on_status` for the outcome of a referral from Spice, or `update` for a referral out to Spice.
-- The FHIR resource travels unchanged inside a `CceClinicalEvent` box. The emitter builds no CloudEvent.
+- A setting, `OPENMRS_EMITTER_TARGET`, chooses the path: `beckn` (the default on this branch) or `openhim` (today's path).
+- In `beckn` mode every changed resource goes to the HIE as one Sygnal `sygnal/event/report`, through OpenMRS's Sygnal onix (`onix-openmrs`). The HIE passes it on to CCE. No callback follows; the synchronous answer (`202` + `Ack`, or a `Nack`) is the whole result.
+- A referral `ServiceRequest` can also lead to one Beckn message to Spice: `on_status` for the outcome of a referral from Spice, or `update` for a referral out to Spice. These are unchanged.
+- The FHIR resource travels unchanged inside a `CceClinicalEvent` box: `eventAttributes` on the Sygnal leg, `performanceAttributes` on the Beckn legs. The emitter builds no CloudEvent.
 - Polling, enrichment, the national-ID rewrite and the checkpoint stay as they are.
-- No new endpoint. Callbacks (`on_update`, Spice's `on_status`) go to the receiver adaptor, not the emitter.
+- No new endpoint. Spice's callbacks (`on_update`, `on_status`) go to the receiver adaptor, not the emitter.
 
 ---
 
-## 2. The four flows
-
-This is the confirmed end-to-end picture, copied from the central design.
+## 2. The flows
 
 ```
----- OpenMRS to CCE ----
-openmrs-emitter-adaptor → openmrs-onix(bap) ══► openhim-onix(bpp) → openhim-emitter-adaptor (unwrap) → OpenHIM channel → openhim-emitter-adaptor
-                                                                                                                         │
-                                         cce-onix(bpp) ◄══ openhim-onix(bap) ◄── openhim-emitter-adaptor (wrap) ◄───────────┘
-                                              │
-                                              └──► cce-beckn-service → CCE
+---- OpenMRS to CCE (Sygnal) ----
+openmrs-emitter-adaptor --sygnal/event/report--> onix-openmrs ══► onix-openhim → openhim-emitter-adaptor
+                                                                                       │
+                     cce-beckn-service ◄── onix-cce ◄══ onix-openhim ◄─sygnal/event/report┘
 
----- Spice to CCE ----
-fhir-emitter → spice-beckn-service → spice-onix(bap) ══► openhim-onix(bpp) → … the same as above … → CCE
-
----- Spice to OpenMRS ----
+---- Spice to OpenMRS (Beckn, unchanged) ----
 Spice → fhir-emitter → spice-beckn-service → spice-onix(bap) ══► openmrs-onix(bpp) → openmrs-receiver-adaptor → OpenMRS
 
----- OpenMRS to Spice ----
+---- OpenMRS to Spice (Beckn, unchanged) ----
 OpenMRS → openmrs-emitter-adaptor → openmrs-onix(bap) ══► spice-onix(bpp) → spice-beckn-service → Spice
 ```
 
-══ marks a Beckn hop: signed by the sender's adapter and checked by the receiver's adapter. ─ marks plain HTTP.
+══ marks a signed hop: signed by the sender's adapter and checked by the receiver's adapter. ─ marks plain HTTP.
 
 ### 2.1 The emitter's part in each flow
 
 | Flow | Emitter's part |
 |---|---|
-| OpenMRS to CCE | Sends every changed resource as `update` on the "HIE feed" contract, through `onix-bap`. In the HIE, `openhim-cce-emitter-adaptor` unwraps it, runs it through the OpenHIM channel and its existing pipeline (patient, facility, redaction, CloudEvent), then wraps it and sends it to CCE over Beckn |
+| OpenMRS to CCE | Sends every changed resource as Sygnal `sygnal/event/report` to the HIE, through `onix-openmrs`. The HIE forwards the event to CCE with the same event id |
 | Spice to CCE | None |
-| Spice to OpenMRS | The receiver adaptor writes the referral. When the clinician completes or declines it, the emitter sends `on_status` to Spice on the "referrals in" contract, through `onix-bpp` (§5.4, steps 5–6) |
-| OpenMRS to Spice | Sends `update` to Spice on the "referrals out" contract, through `onix-bap`, when the destination facility is one Spice serves (§5.5) |
+| Spice to OpenMRS | The receiver adaptor writes the referral. When the clinician completes or declines it, the emitter sends Beckn `on_status` to Spice on the "referrals in" contract, through `onix-bpp` (§5.4, steps 5–6) |
+| OpenMRS to Spice | Sends Beckn `update` to Spice on the "referrals out" contract, through `onix-bap`, when the destination facility is one Spice serves (§5.5) |
 
 In the last two flows the emitter also sends the same `ServiceRequest` to the HIE for CCE, as in the first flow (§5.6).
 
-### 2.2 Flow diagrams
+### 2.2 Sygnal participants
 
-The diagrams below are the same as in the central design's flow diagrams. Mermaid notation. CCE alerts to OpenMRS are out of scope for now and are not drawn.
+| Participant | Subscriber id (`senderId` / `receiverId`) | onix container |
+|---|---|---|
+| OpenMRS (this emitter) | `bap.openmrs.nextsteps.mdtlabs.org` | `onix-openmrs` |
+| HIE | `bap.openhim.nextsteps.mdtlabs.org` | `onix-openhim` |
+| CCE | `bpp.cce.nextsteps.mdtlabs.org` | `onix-cce` |
 
-**All four flows**
+Each Sygnal onix listens on `8082` inside its container. An app **sends** by posting the full message to `http://<onix-container>:8082/sygnal/caller/<action>`; onix signs it and delivers it to `context.receiverUri + "/" + action`. onix **receives** at `https://<public-host>/sygnal/receiver/<action>`, checks the signature and the schema, and forwards to the app at `/<action>`.
 
-```mermaid
-flowchart LR
-    subgraph OpenMRS side
-        OM[(OpenMRS)]
-        OEM[openmrs-emitter-adaptor]
-        ORA[openmrs-receiver-adaptor]
-        OON[openmrs-onix<br/>bap + bpp]
-    end
+### 2.3 Flow diagrams
 
-    subgraph Spice side
-        SP[(Spice)]
-        SFE[fhir-emitter]
-        SBS[spice-beckn-service]
-        SON[spice-onix<br/>bap + bpp]
-    end
-
-    subgraph HIE
-        HONB[openhim-onix<br/>bpp]
-        HBS[openhim-emitter-adaptor<br/>Beckn endpoint + output]
-        OH[OpenHIM channel]
-        MED[openhim-emitter-adaptor<br/>existing pipeline]
-        HONA[openhim-onix<br/>bap]
-    end
-
-    subgraph CCE side
-        CON[cce-onix<br/>bpp]
-        CBS[cce-beckn-service]
-        CCE[(CCE)]
-    end
-
-    OM --> OEM --> OON
-    OON --> ORA --> OM
-    SP --> SFE --> SBS
-    SBS <--> SON
-    SBS --> SP
-
-    OON <-- "Beckn: referrals and outcomes" --> SON
-    OON -- "Beckn: events" --> HONB
-    SON -- "Beckn: events" --> HONB
-    HONB --> HBS
-    HBS -- "FHIR + headers" --> OH --> MED
-    MED -- "CloudEvent" --> HBS
-    HBS --> HONA
-    HONA -- "Beckn: events" --> CON --> CBS --> CCE
-```
-
-**OpenMRS → CCE: an event.** The emitter sends `update` on the HIE feed contract. Everything after `openhim-onix` happens in the HIE.
+**OpenMRS → CCE: an event (Sygnal).**
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant OEM as openmrs-emitter-adaptor
-    participant OON as openmrs-onix (bap)
-    participant HONB as openhim-onix (bpp)
-    participant HBS as openhim-emitter-adaptor<br/>(Beckn endpoint / output)
-    participant OH as OpenHIM channel
-    participant MED as openhim-emitter-adaptor<br/>(existing /inbound pipeline)
-    participant HONA as openhim-onix (bap)
-    participant CON as cce-onix (bpp)
+    participant OON as onix-openmrs
+    participant HON as onix-openhim
+    participant HIE as openhim-emitter-adaptor
+    participant CON as onix-cce
     participant CBS as cce-beckn-service
-    participant COL as CCE collector
 
-    OEM->>OEM: poll, enrich (as today)<br/>event id = hash of resource<br/>read patient id<br/>wrap in update (HIE feed)
-    OEM->>OON: /bap/caller/update
+    OEM->>OEM: poll, enrich (as today)<br/>event id = hash of resource<br/>read patient id<br/>wrap in sygnal/event/report
+    OEM->>OON: POST /sygnal/caller/sygnal/event/report
     OON->>OON: sign as OpenMRS, check schema
-    OON->>HONB: POST /bpp/receiver/update
-    HONB->>HONB: verify signature (registry), check schema
-    HONB->>HBS: update
-    HBS->>HBS: unwrap: take resource out of the box
-    HBS->>OH: POST channel (FHIR)<br/>X-Source-Event-Id, X-Correlation-Id<br/>OpenHIM client auth
-    OH->>MED: route
-    MED->>MED: patient id, facility id,<br/>remove clinical findings,<br/>CloudEvent with fixed id
-    MED->>HBS: CloudEvent (Beckn output for this source)
-    HBS->>HBS: wrap for CCE<br/>update on the HIE's contract with CCE
-    HBS->>HONA: /bap/caller/update
-    HONA->>CON: POST /bpp/receiver/update (signed as OpenHIM)
-    CON->>CBS: update
-    CBS->>COL: CloudEvent (source = OpenHIM)
-    COL-->>CBS: 202 accepted / 200 duplicate
-    CBS-->>CON: Ack
-    CON-->>HONA: Ack
-    HONA-->>HBS: Ack
-    HBS-->>MED: 2xx
-    MED-->>OH: 2xx
-    OH-->>HBS: 2xx
-    HBS-->>HONB: Ack
-    HONB-->>OON: Ack
-    OON-->>OEM: Ack → done
-    Note over CBS,OEM: on_update ACCEPTED / DUPLICATE passed back by the HIE<br/>→ openmrs-onix (bap) → openmrs-receiver-adaptor (logged)<br/>may come before the Ack, or never
+    OON->>HON: POST /sygnal/receiver/sygnal/event/report
+    HON->>HON: verify signature (registry), check schema
+    HON->>HIE: POST /sygnal/event/report
+    HIE->>CON: sygnal/event/report (signed as the HIE, same event id)
+    CON->>CBS: POST /sygnal/event/report
+    CBS-->>CON: 202 Ack
+    CON-->>HIE: 202 Ack
+    HIE-->>HON: 202 Ack
+    HON-->>OON: 202 Ack
+    OON-->>OEM: 202 Ack → done
 ```
 
-**Spice → OpenMRS: a referral, and its outcome.** The receiver takes the referral. Later the emitter sends the outcome as `on_status`, and the same order to the HIE.
+**Spice → OpenMRS: a referral, and its outcome (Beckn, unchanged).** The receiver takes the referral. Later the emitter sends the outcome as `on_status`, and the same order to the HIE.
 
 ```mermaid
 sequenceDiagram
@@ -182,18 +124,17 @@ sequenceDiagram
     Note over OM: days later, clinician completes or declines the order
     OEM->>OM: poll
     OEM->>OEM: ServiceRequest: inbound, referral-response, basedOn 1838<br/>classify → referral outcome
-    par to Spice
+    par to Spice (Beckn)
         OEM->>OON: /bpp/caller/on_status (referrals in)<br/>COMPLETED / DECLINED
         OON->>SON: on_status
         SON-->>OON: Ack
         OON-->>OEM: Ack
-    and to CCE
-        OEM->>OON: /bap/caller/update (HIE feed) — as in §2
-        OON-->>OEM: Ack
+    and to CCE (Sygnal)
+        OEM->>OEM: sygnal/event/report to the HIE — as above
     end
 ```
 
-**OpenMRS → Spice: a referral, and its outcome.** The emitter sends `update` on the "referrals out" contract. Spice's callbacks go to the receiver.
+**OpenMRS → Spice: a referral, and its outcome (Beckn, unchanged).** The emitter sends `update` on the "referrals out" contract. Spice's callbacks go to the receiver.
 
 ```mermaid
 sequenceDiagram
@@ -209,7 +150,7 @@ sequenceDiagram
     Note over OM: clinician refers patient to facility 0417
     OEM->>OM: poll
     OEM->>OEM: ServiceRequest: outbound, performer 0417<br/>0417 served by Spice? yes
-    par to Spice
+    par to Spice (Beckn)
         OEM->>OON: /bap/caller/update (referrals out)
         OON->>SON: POST /bpp/receiver/update
         SON->>SBS: update
@@ -217,9 +158,8 @@ sequenceDiagram
         SBS-->>SON: Ack
         SON-->>OON: Ack
         OON-->>OEM: Ack
-    and to CCE
-        OEM->>OON: /bap/caller/update (HIE feed) — as in §2
-        OON-->>OEM: Ack
+    and to CCE (Sygnal)
+        OEM->>OEM: sygnal/event/report to the HIE — as above
     end
     SON->>OON: on_update ACCEPTED
     OON->>ORA: /beckn/bap-webhook/on_update → logged
@@ -241,21 +181,20 @@ flowchart TD
     P -- no --> F[Skip: log + metric, no message]
     P -- yes --> ID[Event id = hash of resource]
     ID --> C{CCE leg on?}
-    C -- yes --> CU[update to the HIE<br/>via onix-bap]
+    C -- yes --> CU[Sygnal sygnal/event/report to the HIE<br/>via onix-openmrs]
     C -- no --> K
     CU --> K{ServiceRequest?}
     K -- no --> DONE[Done]
     K -- yes --> OB{outbound?}
     OB -- no --> RR{inbound and referral-response,<br/>completed or revoked?}
-    RR -- yes --> OS[on_status to Spice<br/>via onix-bpp]
+    RR -- yes --> OS[Beckn on_status to Spice<br/>via onix-bpp]
     RR -- no --> DONE
     OB -- yes --> FC{facility code in<br/>Spice's list?}
     FC -- no --> DONE
-    FC -- yes --> SU[update to Spice<br/>via onix-bap]
+    FC -- yes --> SU[Beckn update to Spice<br/>via onix-bap]
     OS --> DONE
     SU --> DONE
 ```
-
 
 ---
 
@@ -264,7 +203,7 @@ flowchart TD
 | `OPENMRS_EMITTER_TARGET` | Behaviour |
 |---|---|
 | `openhim` | Today's behaviour. `ForwardingEngine` posts FHIR JSON to `{OPENHIM_BASE_URL}/{ResourceType}` |
-| `beckn` (default on `demo-beckn`) | `BecknTargetForwarder` builds Beckn messages and posts them to the `openmrs-onix` callers |
+| `beckn` (default on this branch) | `BecknTargetForwarder` posts `sygnal/event/report` to the onix Sygnal caller and, for referrals, Beckn messages to the `onix-bap` / `onix-bpp` callers |
 
 The switch is read once at start. Changing it needs a restart. One emitter sends on one path only; it never sends the same resource to both.
 
@@ -285,10 +224,10 @@ What stays the same in both modes:
 |---|---|---|
 | 1 | `EventIdFactory` | Builds the event id from the resource JSON (§5) |
 | 2 | `PatientIdReader` | Reads the patient id (§6) |
-| 3 | `BecknMessageBuilder` | Builds `update` on the HIE feed contract |
-| 4 | `OnixClient` | Posts it to `onix-bap`'s caller. Reads `Ack` / `Nack`. Retries when allowed (§10) |
+| 3 | `BecknMessageBuilder` | Builds Sygnal `sygnal/event/report` (§8.1) |
+| 4 | `OnixClient` | Posts it to the Sygnal caller of `onix-openmrs`. Reads `Ack` / `Nack`. Retries when allowed (§10) |
 | 5 | `ReferralClassifier` | For a `ServiceRequest`, decides whether Spice gets a message too (§7) |
-| 6 | `BecknMessageBuilder` + `OnixClient` | If so, builds and posts `on_status` (through `onix-bpp`) or `update` (through `onix-bap`) |
+| 6 | `BecknMessageBuilder` + `OnixClient` | If so, builds and posts Beckn `on_status` (through `onix-bpp`) or `update` (through `onix-bap`) (§8.2) |
 | 7 | `BecknMessageLog` | Writes one log line per message (§13) |
 | 8 | `BecknTargetForwarder` | Returns a `ForwardResult` to the poller. It is a success only if every message for the resource got `Ack` |
 
@@ -309,19 +248,14 @@ The event id is a name-based UUID of a SHA-256 hash of the resource JSON, with k
 
 Decimals are read exactly (`1.50` stays `1.50`), both for the hash and for the `resource` that is sent.
 
-The event id is used as `performance[0].id`. Every message carries exactly one performance entry. The HIE's mediator copies the id into `X-Source-Event-Id`. It then derives its own CloudEvent id from it (a name-based UUID of source + `X-Source-Event-Id`), and uses that as the performance id towards CCE. So the id towards CCE is fixed too.
+The same event id is used on every leg: it is `message.events[0].id` (the `CoordinationEvent` id) on the Sygnal leg, and `performance[0].id` on the Beckn referral legs.
 
-How CCE uses it:
-
-- CCE knows an event by the pair (`bapId`, performance id). It uses the performance id unchanged as the CloudEvent id.
-- Towards CCE the sender is the HIE, so CCE's duplicate check works on the HIE's derived id. The same emitter event id always gives the same HIE id.
-- A resend with the same performance id gets `Ack`, and CCE drops it as a duplicate (`on_update` says `DUPLICATE`).
-- CCE allows at most 50 characters for the performance id. A UUID is 36.
+How CCE uses it: the HIE forwards the event to CCE with the **same id** on every hop, so CCE's collector recognises a repeat and answers `Ack` without storing it twice. CCE allows at most 50 characters; a UUID is 36.
 
 Why a hash and not `meta.lastUpdated`:
 
 - The same change always gets the same id. A resend gives the same id, and CCE drops the duplicate.
-- Any change to the resource gives a new id. After CCE refuses an event (`EVENT_REJECTED`), the corrected resource has a new hash, so it gets a new id. With the old id CCE would drop it as a duplicate.
+- Any change to the resource gives a new id. After CCE refuses an event (`BIZ_GENERIC_ERROR`), the corrected resource has a new hash, so it gets a new id. With the old id CCE would drop it as a duplicate.
 - The resource type and id are inside the JSON, so two resources never share an id.
 - OpenMRS can change an older order's status without moving its `lastUpdated`. The timestamp also has whole seconds only, and can be missing.
 
@@ -340,7 +274,7 @@ The namespace UUID must never change. If it does, every event gets a new id.
 | `Patient` | Its national-id identifier (system `emitter.patient.national-id.system`); if it has none, its id. `PatientReferenceRewriter` has already set the id to the national ID, so both are normally the same |
 | Any resource with `subject` or `patient` | The reference without `Patient/`. `PatientReferenceRewriter` has already put the national ID there |
 
-No facility id is read. The mediator in the HIE reads the facility from the resource, as today.
+No facility id is read. The HIE reads the facility from the resource, as today.
 
 The emitter makes no extra call to OpenMRS for this. It relies on the national-ID rewrite (`emitter.patient.national-id.*`). With `on-missing=forward-as-is`, the reference can still hold the OpenMRS UUID; that value is then sent as is.
 
@@ -348,7 +282,7 @@ The emitter makes no extra call to OpenMRS for this. It relies on the national-I
 
 ---
 
-## 7. Referral classification
+## 7. Referral classification (Beckn legs, unchanged)
 
 `ReferralClassifier` reads only markers that the emitter itself added (§2.1 of the central design). It runs for `ServiceRequest` only. The first matching rule wins.
 
@@ -358,7 +292,7 @@ The emitter makes no extra call to OpenMRS for this. It relies on the national-I
 | 2 | `category` has system `http://cce.openphc.org/CodeSystem/referral-direction`, code `outbound` (whatever the status), and a `performer[].identifier` with system `http://cce.openphc.org/fhir/NamingSystem/facility-code` whose value is in `emitter.beckn.spice.facility-codes` | `update` | Referrals out | `onix-bap` `/bap/caller/update` |
 | 3 | An open `inbound` referral (the echo of a referral the receiver wrote), an `outbound` referral to a facility Spice does not serve, or anything else | None | — | — |
 
-Every resource, including those in rules 1 and 2, also goes to the HIE as `update`.
+Every resource, including those in rules 1 and 2, also goes to the HIE as Sygnal `sygnal/event/report`.
 
 `OrderIdentifierEnricher` adds `referral-response` to every completed or revoked referral order, whatever its direction. That is why rule 1 also needs `inbound`: a completed referral *out* must not go back as `on_status` on the "referrals in" contract. It goes to Spice under rule 2 as a changed referral.
 
@@ -370,123 +304,146 @@ Where the markers come from:
 | `inbound` / `outbound` category | `OrderIdentifierEnricher` | `emitter.referral.direction.category-system` |
 | Destination facility code on `performer` | `OrderIdentifierEnricher` | `emitter.referral.direction.destination-identifier-system` |
 
-The classifier should read the systems and codes from these existing settings, not repeat them.
+The classifier reads the systems and codes from these existing settings; it does not repeat them.
 
 Each change to a referral out goes to Spice again as a new `update`, with the same `ServiceRequest` id. Spice must treat it as a change.
 
 ---
 
-## 8. Contracts
+## 8. Messages
 
-There are three fixed contracts. No message opens one. The ids are settings (§4.3).
+### 8.1 CCE events leg: Sygnal `sygnal/event/report`
 
-| Contract | Consumer | Provider (issues the ids) | Used by the emitter | Action the emitter sends |
-|---|---|---|---|---|
-| HIE feed | OpenMRS | OpenHIM | Yes | `update` (as consumer, through `onix-bap`) |
-| Referrals in | Spice | OpenMRS | Yes, for outcomes | `on_status` (as provider, through `onix-bpp`) |
-| Referrals out | OpenMRS | Spice | Yes | `update` (as consumer, through `onix-bap`) |
+`BecknMessageBuilder.eventReport` fills the message from `emitter.beckn.sygnal.*`. There is no contract, no commitment, no `bapId` / `bppId` / `bapUri` / `bppUri`: the Sygnal `context` is a closed object and onix refuses any other field.
+
+**`context`**
+
+| Field | Value |
+|---|---|
+| `version` | `2.0.0` |
+| `action` | `sygnal/event/report` |
+| `networkId` | `sygnal.network-id` (required; default `sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry`) |
+| `senderId` | `sygnal.id` (`bap.openmrs.nextsteps.mdtlabs.org`) |
+| `receiverId` | `sygnal.hie.id` (`bap.openhim.nextsteps.mdtlabs.org`) |
+| `receiverUri` | `sygnal.hie.uri`: the HIE's public onix receiver base, e.g. `https://hie.example.org/sygnal/receiver` (onix appends the action) |
+| `transactionId` | `sygnal.hie.transaction-id` when set (must be a UUID); otherwise a new random UUID per event, kept across the retries of that event. Never derived from patient data |
+| `messageId` | A new random UUID for every attempt, including each retry (§10) |
+| `timestamp` | The send time of the attempt |
+
+**`message.events[0]`** — exactly one `sygnal:CoordinationEvent`, with **no `@context`** (onix would refuse it):
+
+| Field | Value |
+|---|---|
+| `@type` | `sygnal:CoordinationEvent` |
+| `id` | The event id (§5) |
+| `revision` | `1`, always. A correction is a new event with a new id |
+| `eventType` | `DELIVERY_RECORDED`. The CCE kind of event is `eventAttributes.eventType` |
+| `granularity` | `INDIVIDUAL` |
+| `from` | `{ "id": sygnal.id, "role": "PROVIDER" }`. `from.id` equals `context.senderId` |
+| `occurredAt` | `meta.lastUpdated` of the resource as a UTC instant; the build time if it is missing or not a full timestamp (see below) |
+| `eventAttributes` | The `CceClinicalEvent` box (§8.3) |
+
+`occurredAt` is when OpenMRS recorded **this version** of the resource, which is the version the event id is the hash of. It is present on every resource type and is always a full instant. The time of the clinical act itself (`Encounter.period.start`, `Observation.effectiveDateTime`, `ServiceRequest.authoredOn`, …) stays in the resource; CCE's `ClinicalEventTimeExtractor` reads it from there and prefers it over the envelope time for its schedules, so the emitter does not keep a second copy of that table. A prior order refetched by `OrderRevisionResolver` keeps its old `lastUpdated` (OpenMRS does not move it when the status flips), so its `occurredAt` is the time of the original order.
+
+### 8.2 Spice referral legs: Beckn `on_status` / `update` (unchanged)
+
+There are two fixed referral contracts. No message opens one. The ids are settings (§4.3).
+
+| Contract | Consumer | Provider (issues the ids) | Action the emitter sends |
+|---|---|---|---|
+| Referrals in | Spice | OpenMRS | `on_status` (as provider, through `onix-bpp`) |
+| Referrals out | OpenMRS | Spice | `update` (as consumer, through `onix-bap`) |
 
 `BecknMessageBuilder` fills `context` and `message.contract` from the settings:
 
-| Field | HIE `update` | Spice `on_status` | Spice `update` |
-|---|---|---|---|
-| `networkId` | `self.network-id`, if set | `self.network-id`, if set | `self.network-id`, if set |
-| `bapId` / `bapUri` | `self.bap-*` | `spice.bap-*` | `self.bap-*` |
-| `bppId` / `bppUri` | `openhim.bpp-*` | `self.bpp-*` | `spice.bpp-*` |
-| `transactionId` | `openhim.transaction-id` | `spice.referrals-in.transaction-id` | `spice.referrals-out.transaction-id` |
-| `contract.id` | `openhim.contract-id` | `spice.referrals-in.contract-id` | `spice.referrals-out.contract-id` |
-| `commitments` | `openhim.commitment-file` | `spice.referrals-in.commitment-file` | `spice.referrals-out.commitment-file` |
+| Field | Spice `on_status` | Spice `update` |
+|---|---|---|
+| `networkId` | `self.network-id`, if set | `self.network-id`, if set |
+| `bapId` / `bapUri` | `spice.bap-*` | `self.bap-*` |
+| `bppId` / `bppUri` | `self.bpp-*` | `spice.bpp-*` |
+| `transactionId` | `spice.referrals-in.transaction-id` | `spice.referrals-out.transaction-id` |
+| `contract.id` | `spice.referrals-in.contract-id` | `spice.referrals-out.contract-id` |
+| `commitments` | `spice.referrals-in.commitment-file` | `spice.referrals-out.commitment-file` |
 
-`messageId` is a new random UUID for every attempt, including each retry (§10). `timestamp` is the send time. `version` is `2.0.0`. `networkId` is optional and left out when `self.network-id` is not set.
+`messageId` is a new random UUID for every attempt, including each retry (§10). `timestamp` is the send time. `version` is `2.0.0`. `networkId` is optional and left out when `self.network-id` is not set (it is separate from the Sygnal `sygnal.network-id`). `performance` always holds exactly one entry, whose `performanceAttributes` is the `CceClinicalEvent` box (§8.3).
 
-`performance` always holds exactly one entry.
+The demo sends no `confirm`. The Beckn specification asks for one before `update` (§3, §11).
 
-The HIE feed commitment is OpenHIM's own (example id `hie-event-feed`). It has the same shape as CCE's fixed `cce-care-coordination` commitment (in cce-beckn-service's `commitment.json`). The emitter repeats it unchanged in every HIE message, from `openhim.commitment-file`:
+### 8.3 The `CceClinicalEvent` box
 
-```json
-{
-  "id": "hie-event-feed",
-  "status": { "descriptor": { "code": "ACTIVE" } },
-  "resources": [
-    { "id": "hie-event-feed-resource", "descriptor": { "name": "HIE event feed" }, "quantity": { "count": 1 } }
-  ],
-  "offer": { "id": "hie-event-feed-offer", "resourceIds": ["hie-event-feed-resource"] }
-}
-```
-
-The ids come from the OpenHIM admin. The HIE's own `update` to CCE carries CCE's `cce-care-coordination` commitment, not this one.
-
-The `performanceAttributes` box uses the `CceClinicalEvent` schema:
+The same box is `eventAttributes` on the Sygnal leg and `performanceAttributes` on the Beckn legs:
 
 | Field | Required | Value |
 |---|---|---|
 | `@context` | Yes | `{OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL}/CceClinicalEvent/v1.0/context.jsonld` |
 | `@type` | Yes | `cce:CceClinicalEvent` |
-| `eventType` | Yes | The FHIR resource type, as the HIE's mediator uses for the CloudEvent `type` today. CCE takes any non-empty string; the values are to be agreed with the CCE team |
+| `eventType` | Yes | The FHIR resource type |
 | `patientId` | Yes | §6 |
 | `fhirVersion` | Yes | `4.0.1` |
 | `resource` | Yes | The FHIR resource, as the emitter built it |
 | `sourceEventId` | No | `{ResourceType}/{id}` |
 
-There is no CloudEvent in the emitter. CloudEvents exist only in the HIE's mediator and in CCE.
-
-The demo sends no `confirm`. The Beckn specification asks for one before `update` (§3, §11).
+There is no CloudEvent in the emitter. CloudEvents exist only in the HIE and in CCE.
 
 ---
 
 ## 9. Message samples
 
-### 9.1 An event to the HIE (`update`)
+### 9.1 An event to the HIE (Sygnal `sygnal/event/report`)
 
-Posted to `{OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL}/update`.
+Posted to `{OPENMRS_EMITTER_BECKN_SYGNAL_CALLER_URL}/sygnal/event/report`, by default `http://onix-openmrs:8082/sygnal/caller/sygnal/event/report`. The action is appended with its slashes as they are, never URL-encoded (`%2F`).
 
 ```json
 {
   "context": {
     "version": "2.0.0",
-    "action": "update",
-    "bapId": "bap.openmrs.example.org",
-    "bapUri": "https://openmrs.example.org/bap/receiver",
-    "bppId": "bpp.openhim.example.org",
-    "bppUri": "https://hie.example.org/bpp/receiver",
+    "action": "sygnal/event/report",
+    "networkId": "sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry",
+    "senderId": "bap.openmrs.nextsteps.mdtlabs.org",
+    "receiverId": "bap.openhim.nextsteps.mdtlabs.org",
+    "receiverUri": "https://hie.example.org/sygnal/receiver",
     "transactionId": "0d5f8c1a-7b2e-4f6d-9a3c-1e2b3c4d5e6f",
     "messageId": "9c4e2a10-5d6f-4b7a-8c9d-0e1f2a3b4c5d",
     "timestamp": "2026-11-13T08:00:35Z"
   },
   "message": {
-    "contract": {
-      "id": "5b1e7f3c-2a4d-4c6e-8f90-a1b2c3d4e5f6",
-      "commitments": [ { "id": "hie-event-feed", "...": "the same in every message" } ],
-      "performance": [
-        {
-          "id": "3f6c1c1e-8a53-5b0e-9d7a-2b6f4e1a9c10",
-          "performanceAttributes": {
-            "@context": "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CceClinicalEvent/v1.0/context.jsonld",
-            "@type": "cce:CceClinicalEvent",
-            "eventType": "Encounter",
-            "patientId": "1198503150001234",
-            "fhirVersion": "4.0.1",
-            "sourceEventId": "Encounter/7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
-            "resource": {
-              "resourceType": "Encounter",
-              "id": "7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
-              "meta": { "lastUpdated": "2026-11-13T08:00:12Z" },
-              "status": "finished",
-              "subject": { "reference": "Patient/1198503150001234" },
-              "period": { "start": "2026-11-13T07:30:00Z", "end": "2026-11-13T08:00:00Z" },
-              "location": [ { "location": { "reference": "Location/0002" } } ]
-            }
+    "events": [
+      {
+        "@type": "sygnal:CoordinationEvent",
+        "id": "3f6c1c1e-8a53-5b0e-9d7a-2b6f4e1a9c10",
+        "revision": 1,
+        "eventType": "DELIVERY_RECORDED",
+        "granularity": "INDIVIDUAL",
+        "from": { "id": "bap.openmrs.nextsteps.mdtlabs.org", "role": "PROVIDER" },
+        "occurredAt": "2026-11-13T08:00:12Z",
+        "eventAttributes": {
+          "@context": "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CceClinicalEvent/v1.0/context.jsonld",
+          "@type": "cce:CceClinicalEvent",
+          "eventType": "Encounter",
+          "patientId": "1198503150001234",
+          "fhirVersion": "4.0.1",
+          "sourceEventId": "Encounter/7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
+            "meta": { "lastUpdated": "2026-11-13T08:00:12.000+00:00" },
+            "status": "finished",
+            "subject": { "reference": "Patient/1198503150001234" },
+            "period": { "start": "2026-11-13T07:30:00Z", "end": "2026-11-13T08:00:00Z" },
+            "location": [ { "location": { "reference": "Location/0002" } } ]
           }
         }
-      ]
-    }
+      }
+    ]
   }
 }
 ```
 
-### 9.2 A referral outcome to Spice (`on_status`)
+The tests check against this sample (`src/test/resources/beckn/sample-event-report.json`).
 
-Posted to `{OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL}/on_status`. The same `ServiceRequest` also goes to the HIE as `update` (9.1), with the same performance id and `sourceEventId`.
+### 9.2 A referral outcome to Spice (Beckn `on_status`, unchanged)
+
+Posted to `{OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL}/on_status`. The same `ServiceRequest` also goes to the HIE as `sygnal/event/report` (9.1), with the same event id and `sourceEventId`.
 
 ```json
 {
@@ -545,114 +502,96 @@ What to notice:
 - `basedOn` holds `1838`, Spice's own referral id. Spice finds its referral by it.
 - The contract stays `ACTIVE`. All referrals from Spice share it.
 - A declined referral has performance status `DECLINED` and `ServiceRequest` status `revoked`.
-- Nothing is removed from the resource on the Spice leg. The HIE's mediator removes clinical findings before CCE sees the event.
+- Nothing is removed from the resource on the Spice leg. The HIE removes clinical findings before CCE sees the event.
 
 ---
 
 ## 10. Answers and retries
 
-`onix-bap` and `onix-bpp` pass the far side's answer back in the same HTTP call. On the HIE leg, the answer comes back hop by hop from CCE, so an `Ack` means CCE accepted the event. On the Spice legs, it is Spice's answer.
+onix passes the far side's answer back in the same HTTP call. On the CCE events leg the answer comes back hop by hop from CCE, so an `Ack` means CCE accepted the event (or already had it). On the Spice legs, it is Spice's answer. Every leg uses the same `Ack` / `Nack` shape and the same rules.
 
 ### 10.1 The answer body
 
-The HIE and Spice answer in CCE's `Ack` / `Nack` shape. The `messageId` is the one from the request.
-
-`Ack`, HTTP 200:
+`Ack` (HTTP 202 on the Sygnal leg, 200 on the Beckn legs):
 
 ```json
 { "message": { "status": "ACK", "messageId": "9c4e2a10-5d6f-4b7a-8c9d-0e1f2a3b4c5d" } }
 ```
 
-`Nack`, HTTP 400 or 500:
+`Nack`, HTTP 400 (the sender's error) or 5xx (temporary):
 
 ```json
 {
   "message": {
     "status": "NACK",
     "messageId": "9c4e2a10-5d6f-4b7a-8c9d-0e1f2a3b4c5d",
-    "error": { "code": "BAD_REQUEST", "message": "performance[0].id is required" }
+    "error": { "code": "SCH_REQUIRED_FIELD_MISSING", "message": "events[0].id is missing" }
   }
 }
 ```
 
-Codes the emitter may see:
+Codes the emitter may see on the CCE events leg (canonical Beckn codes):
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `BAD_REQUEST` | 400 | A rule broken. The text names the field. Can also come from an adapter's schema check |
-| `NOT_SUPPORTED` | 400 | The action is not supported |
-| `EVENT_REJECTED` | 400 | CCE (through the HIE) refused the event |
-| `UNAVAILABLE`, `COLLECTOR_UNAVAILABLE`, `INTERNAL_ERROR` | 500 | Something on the route is down or slow. Send again later |
+| `CTX_MISSING_FIELD`, `CTX_INVALID_FIELD`, `CTX_ACTION_MISMATCH` | 400 | Something wrong in `context` (for example `receiverId` is not the receiver's id) |
+| `SCH_INVALID_JSON`, `SCH_REQUIRED_FIELD_MISSING`, `SCH_SCHEMA_VALIDATION_FAILED`, `SCH_TYPE_NOT_SUPPORTED` | 400 | The message does not match the schema |
+| `BIZ_GENERIC_ERROR` | 400 | CCE's collector refused the event |
+| `NET_DOWNSTREAM_UNAVAILABLE`, `NET_INTERNAL_ERROR` | 500 | Something on the route is down. Send again later |
 
 Spice's own codes are to be agreed. The emitter decides by HTTP status and `status`, not by code, so an unknown code is handled the same way.
 
-As built (`OnixAnswer`): a 2xx answer counts as `Ack` unless its body says `NACK`; a 2xx with a `NACK` body is a `Nack`. The emitter also reads the Beckn 1.x adapter shape `{"message":{"ack":{"status":"ACK"}}}`. A body that is empty or not JSON is judged by its HTTP status alone.
+As built (`OnixAnswer`): any 2xx answer (202 included) counts as `Ack` unless its body says `NACK`; a 2xx with a `NACK` body is a `Nack`. The emitter also reads the Beckn 1.x adapter shape `{"message":{"ack":{"status":"ACK"}}}`. A body that is empty or not JSON is judged by its HTTP status alone.
 
 ### 10.2 What the emitter does
 
 | Answer | Meaning | The emitter |
 |---|---|---|
-| HTTP 200 and `status` `ACK` | Accepted | Done |
-| HTTP 400 (`NACK`), or any other 4xx except 408 and 429 | The message is wrong: schema, signature, contract, or refused | Fails the message. No retry. Logs `error.code` and `error.message` |
+| 2xx and not `NACK` | Accepted, or already known | Done |
+| HTTP 400 (`NACK`), or any other 4xx except 408 and 429 | The message is wrong: schema, signature, context, contract, or refused | Fails the message. **No retry.** Logs `error.code` and `error.message` |
 | HTTP 500 or other 5xx, 408, 429, timeout, or no answer | Something on the route is down or slow | Sends again |
 
-- A resend keeps the same event id (`performance[0].id`) and uses a **new** `messageId`. CCE knows the event by its performance id, not by `messageId`.
+- A resend keeps the same event id (and, on the Sygnal leg, the same `transactionId`) and uses a **new** `messageId`. CCE knows the event by its id, not by `messageId`.
 - Retries use the existing settings `emitter.openhim.retry.max-attempts` (default 3) and `emitter.openhim.retry.backoff-ms` (default 2000, linear: backoff × attempt), as in `ForwardingEngine`.
 - After the last try the emitter drops the message. It moves its bookmark on, as it does today.
 - Each message is sent and retried on its own. A failure towards the HIE does not resend to Spice, and the other way round.
 - Sending again is safe. CCE drops a repeat by event id. Spice must ignore a repeat with the same performance id.
 
-CCE advises resending with a growing wait, for example after 1 minute, 5 minutes and 30 minutes. The emitter's retries are seconds apart, and then it drops the resource. This gap is open (Q4, §14).
-
 ### 10.3 Callbacks
 
-The emitter does not wait for callbacks. `on_update` from the HIE or Spice, and Spice's `on_status` for a referral out, go through `onix-bap`'s receiver to the receiver adaptor, which logs them.
-
-`on_update` is sent once. It may arrive before the `Ack`, or not at all. The `Ack` is the proof. Nothing may depend on `on_update`.
+The Sygnal leg has none: no `on_report` follows `sygnal/event/report`. On the Beckn legs the emitter does not wait for callbacks: `on_update` and Spice's `on_status` for a referral out go to the receiver adaptor, which logs them. `on_update` may arrive before the `Ack`, or not at all. The `Ack` is the proof.
 
 ### 10.4 Timeout budget
 
-The HIE answer comes back through many hops. Each hop must wait longer than the hop behind it. CCE's `Ack` can take up to 17 seconds. The onix default wait (`responseHeaderTimeout`, 5 s) must be raised on every onix container in the chain.
-
-| Hop | Waits for | At least |
-|---|---|---|
-| `openhim-onix` (bap) → `cce-onix` | CCE's `Ack` (up to 17 s) | 20 s |
-| Mediator → `openhim-onix` (bap) caller | the above | 25 s |
-| OpenHIM channel route timeout | mediator `/inbound` | 30 s |
-| Mediator's Beckn endpoint → OpenHIM channel | the above | 35 s |
-| `openhim-onix` (bpp) → mediator Beckn endpoint | the above | 40 s |
-| `openmrs-onix` (bap) → `openhim-onix` (bpp) | the above | 45 s |
-| OpenMRS emitter → `openmrs-onix` (bap) caller (`emitter.beckn.onix.timeout`) | the above | 50 s |
-
-The emitter's wait is the outermost, at 50 s. The numbers are a starting point to agree with the HIE and CCE teams. Resources are sent one after another, so when the far side is slow, the poll is slowed too.
+The answer comes back through every hop. Each hop must wait longer than the hop behind it, and the onix default wait (`responseHeaderTimeout`, 5 s) must be raised on every onix container in the chain. The emitter's wait (`emitter.beckn.onix.timeout`, 50 s, for every leg) is the outermost. The numbers are a starting point to agree with the HIE and CCE teams. Resources are sent one after another, so when the far side is slow, the poll is slowed too.
 
 ---
 
 ## 11. Settings
 
-From Appendix A.1 of the central design. All hosts and ids are made up. These are the setting names as built.
-
 ```yaml
 emitter:
-  target: ${OPENMRS_EMITTER_TARGET:beckn}           # beckn (default on demo-beckn) | openhim
+  target: ${OPENMRS_EMITTER_TARGET:beckn}           # beckn (default on this branch) | openhim
   beckn:
     onix:
-      bap-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL:http://onix-bap:8081/bap/caller}
-      bpp-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL:http://onix-bpp:8082/bpp/caller}
-      timeout: 50s                             # outermost hop (§10.4)
+      bap-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL:http://onix-bap:8081/bap/caller}   # referrals out
+      bpp-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL:http://onix-bpp:8082/bpp/caller}   # referrals in
+      timeout: 50s                             # every leg; outermost hop (§10.4)
     schema-base-url: ${OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL:https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema}
-    self:
+    sygnal:                                    # CCE events leg (Sygnal)
+      caller-url: ${OPENMRS_EMITTER_BECKN_SYGNAL_CALLER_URL:http://onix-openmrs:8082/sygnal/caller}
+      id: ${OPENMRS_EMITTER_BECKN_SYGNAL_ID:bap.openmrs.nextsteps.mdtlabs.org}
+      network-id: ${OPENMRS_EMITTER_BECKN_SYGNAL_NETWORK_ID:sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry}
+      hie:
+        id: ${OPENMRS_EMITTER_BECKN_SYGNAL_HIE_ID:bap.openhim.nextsteps.mdtlabs.org}
+        uri: ${OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI:}                  # required
+        transaction-id: ${OPENMRS_EMITTER_BECKN_SYGNAL_HIE_TRANSACTION_ID:}   # optional UUID
+    self:                                      # Spice referral legs (Beckn)
       network-id:                              # optional; sent as context.networkId when set
       bap-id: bap.openmrs.example.org
       bap-uri: https://openmrs.example.org/bap/receiver
       bpp-id: bpp.openmrs.example.org
       bpp-uri: https://openmrs.example.org/bpp/receiver
-    openhim:
-      bpp-id: bpp.openhim.example.org
-      bpp-uri: https://hie.example.org/bpp/receiver
-      contract-id: 5b1e7f3c-2a4d-4c6e-8f90-a1b2c3d4e5f6
-      transaction-id: 0d5f8c1a-7b2e-4f6d-9a3c-1e2b3c4d5e6f
-      commitment-file: classpath:beckn/commitment-hie.json
     spice:
       name: Spice
       bap-id: bap.spice.example.org
@@ -669,20 +608,27 @@ emitter:
         transaction-id: b52a7c3d-0e4f-4b8c-9d2e-3f4a5b6c7d8e
         commitment-file: classpath:beckn/commitment-referral.json
     legs:
-      cce-events: true
-      referrals-in: true
-      referrals-out: true
+      cce-events: true                         # Sygnal, to the HIE
+      referrals-in: true                       # Beckn on_status, to Spice
+      referrals-out: true                      # Beckn update, to Spice
 ```
 
 | Setting | Meaning |
 |---|---|
-| `onix.bap-caller-url` | `onix-bap`'s caller. The emitter appends `/update` |
-| `onix.bpp-caller-url` | `onix-bpp`'s caller. The emitter appends `/on_status` |
-| `onix.timeout` | Time to wait for one answer. Default 50 s. Must be longer than the timeouts of all hops behind it (§10.4) |
+| `onix.timeout` | Time to wait for one answer, on every leg. Default 50 s. Must be longer than the timeouts of all hops behind it (§10.4) |
 | `schema-base-url` | Base of the `CceClinicalEvent` `@context` URL. The schema files are in the `schema/` folder of the cce-beckn-service repository |
+| **CCE events leg (Sygnal)** | |
+| `sygnal.caller-url` | Sygnal caller of `onix-openmrs`. The emitter appends `/sygnal/event/report` |
+| `sygnal.id` | OpenMRS's Sygnal subscriber id: `context.senderId` and `from.id`. Must be the subscriber id of the keys in `onix-openmrs` |
+| `sygnal.network-id` | Required. `context.networkId` |
+| `sygnal.hie.id` | The HIE's subscriber id: `context.receiverId`. The HIE refuses a report not addressed to it |
+| `sygnal.hie.uri` | Required. The HIE's public onix receiver base: `context.receiverUri`. onix delivers to `{uri}/sygnal/event/report` |
+| `sygnal.hie.transaction-id` | Optional. A fixed UUID for `context.transactionId`. Empty: a new UUID per event |
+| **Spice referral legs (Beckn, unchanged)** | |
+| `onix.bap-caller-url` | `onix-bap`'s caller. The emitter appends `/update` (referrals out) |
+| `onix.bpp-caller-url` | `onix-bpp`'s caller. The emitter appends `/on_status` (referrals in) |
 | `self` | OpenMRS's own Beckn ids: consumer (`bap-*`) and provider (`bpp-*`) |
-| `self.network-id` | Optional. Put into `context.networkId` when set |
-| `openhim` | OpenHIM's provider id and the HIE feed contract ids. Any stable non-blank ids: without `confirm` none are issued, and OpenHIM accepts and echoes them |
+| `self.network-id` | Optional. Put into `context.networkId` of the Beckn messages when set |
 | `spice` | The one HMIS peer (Spice) and its facility codes |
 | `spice.referrals-in` | Contract ids for `on_status` outcomes of referrals from Spice. The receiver does not check Spice's contract id, so these are only what Spice expects back |
 | `spice.referrals-out` | Contract for referrals to Spice. Issued by the Spice admin |
@@ -693,10 +639,19 @@ Environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENMRS_EMITTER_TARGET` | `openhim` | `openhim` or `beckn` |
-| `OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL` | `http://onix-bap:8081/bap/caller` | `onix-bap` caller base URL |
-| `OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL` | `http://onix-bpp:8082/bpp/caller` | `onix-bpp` caller base URL |
+| `OPENMRS_EMITTER_TARGET` | `beckn` (this branch) | `openhim` or `beckn` |
+| `OPENMRS_EMITTER_BECKN_ONIX_TIMEOUT` | `50s` | Wait for one answer, every leg |
 | `OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL` | `https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema` | Schema base URL |
+| `OPENMRS_EMITTER_BECKN_SYGNAL_CALLER_URL` | `http://onix-openmrs:8082/sygnal/caller` | Sygnal caller base URL (CCE events leg) |
+| `OPENMRS_EMITTER_BECKN_SYGNAL_ID` | `bap.openmrs.nextsteps.mdtlabs.org` | Own Sygnal subscriber id |
+| `OPENMRS_EMITTER_BECKN_SYGNAL_NETWORK_ID` | `sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry` | Sygnal `context.networkId` |
+| `OPENMRS_EMITTER_BECKN_SYGNAL_HIE_ID` | `bap.openhim.nextsteps.mdtlabs.org` | The HIE's subscriber id |
+| `OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI` | — (required) | The HIE's public onix receiver base |
+| `OPENMRS_EMITTER_BECKN_SYGNAL_HIE_TRANSACTION_ID` | — | Optional fixed transaction UUID |
+| `OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL` | `http://onix-bap:8081/bap/caller` | `onix-bap` caller base URL (referrals out) |
+| `OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL` | `http://onix-bpp:8082/bpp/caller` | `onix-bpp` caller base URL (referrals in) |
+| `OPENMRS_EMITTER_BECKN_SELF_*`, `OPENMRS_EMITTER_BECKN_SPICE_*`, `OPENMRS_EMITTER_BECKN_REFERRALS_IN_*`, `OPENMRS_EMITTER_BECKN_REFERRALS_OUT_*` | — | Referral-leg ids, contracts and facility codes, as on `demo-beckn` (see the configuration guide) |
+| `OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS`, `…_LEG_REFERRALS_IN`, `…_LEG_REFERRALS_OUT` | `true` | Legs on / off |
 
 Raise `OPENHIM_RETRY_MAX_ATTEMPTS` and `OPENHIM_RETRY_BACKOFF_MS` above 3 and 2000 ms in Beckn mode (Q4).
 
@@ -704,14 +659,14 @@ The `emitter.openhim.*` connection and auth settings are not used in Beckn mode.
 
 As built:
 
-- `application.yml` holds the URLs, timeout, schema base URL, commitment files, `spice.name` and `legs` above. The ids (`self.*`, `openhim.*`, `spice.*`, contract and transaction ids, facility codes) have **no defaults**; set them with the `OPENMRS_EMITTER_BECKN_*` environment variables (each setting has one, see the configuration guide) or in a profile file. `application-beckn-demo.yml` holds the made-up values above (`SPRING_PROFILES_ACTIVE=beckn-demo`).
-- Sample commitment files: `src/main/resources/beckn/commitment-hie.json` (`hie-event-feed`) and `commitment-referral.json` (the draft `referral` commitment, central design Appendix B.1).
-- With `OPENMRS_EMITTER_TARGET=beckn` the emitter checks the settings at start and **fails to start** with a message naming every missing setting. Only the settings of the legs that are on are required. A commitment file that cannot be read, or holds no JSON object with an `id`, also stops the start.
+- `sygnal.id`, `sygnal.network-id` and `sygnal.hie.id` default to the values of the CCE Sygnal network; `sygnal.hie.uri` has **no default**. The referral-leg ids (`self.*`, `spice.*`, contract and transaction ids, facility codes) have **no defaults**, as on `demo-beckn`. `application-beckn-demo.yml` (profile `beckn-demo`) holds example values for both (the hosts and Beckn ids there are made up).
+- With `OPENMRS_EMITTER_TARGET=beckn` the emitter checks the settings at start and **fails to start** with a message naming every missing or wrong setting. Only the settings of the legs that are on are required. `sygnal.hie.uri` must be an absolute `http(s)` URL and `sygnal.hie.transaction-id`, when set, a UUID. A referral commitment file that cannot be read, or holds no JSON object with an `id`, also stops the start.
 - `emitter.target` accepts `openhim` or `beckn` (any case); any other value stops the start.
+- Removed with the move of the CCE leg to Sygnal: `openhim.*` (`bpp-id`, `bpp-uri`, `contract-id`, `transaction-id`, `commitment-file`) and `commitment-hie.json`. `self.bap-*` is no longer needed for the CCE leg, only for referrals out.
 
 ---
 
-## 12. New classes
+## 12. Classes
 
 Package `org.openphc.cce.emitter.beckn`; its beans exist only when `OPENMRS_EMITTER_TARGET=beckn`. Settings are in `EmitterProperties` as `target` and a nested `beckn` config.
 
@@ -721,8 +676,8 @@ Package `org.openphc.cce.emitter.beckn`; its beans exist only when `OPENMRS_EMIT
 | `EventIdFactory` | Sorted-key JSON → SHA-256 → name-based UUID (§5) |
 | `PatientIdReader` | Reads `patientId` from `subject` / `patient`, or a `Patient`'s national-id identifier / id (§6) |
 | `ReferralClassifier` | Applies the rules in §7. Returns: none, `on_status` (with `COMPLETED` / `DECLINED`), or `update` to Spice |
-| `BecknMessageBuilder` | Builds `context`, `message.contract` and the `CceClinicalEvent` box from the settings. Loads the commitment files once |
-| `OnixClient` | Posts to `onix-bap` or `onix-bpp`. Reads `Ack` / `Nack`. Applies the retry rules in §10. Records metrics |
+| `BecknMessageBuilder` | Builds Sygnal `sygnal/event/report` (§8.1) and Beckn `on_status` / `update` (§8.2). Loads the referral commitment files once |
+| `OnixClient` | Posts to the onix callers. Reads `Ack` / `Nack`. Applies the retry rules in §10. Records metrics |
 | `BecknMessageLog` | Writes one log line per message (§13) |
 | `OnixAnswer` | Reads one answer: `Ack`, `Nack` (no retry) or retry (§10) |
 | `OutgoingMessage` | One message ready to post; gives a copy with a new `messageId` and `timestamp` for each attempt |
@@ -738,7 +693,7 @@ FhirPollerService.forwardOne
                                        ├── PatientIdReader
                                        ├── ReferralClassifier
                                        ├── BecknMessageBuilder
-                                       ├── OnixClient ──► onix-bap / onix-bpp
+                                       ├── OnixClient ──► onix-openmrs (Sygnal) / onix-bap / onix-bpp (Beckn)
                                        └── BecknMessageLog
 ```
 
@@ -748,7 +703,7 @@ FhirPollerService.forwardOne
 
 ### 13.1 Metrics
 
-Prometheus names. Tags: `leg` (`cce-events`, `referrals-in`, `referrals-out`), `action` (`update`, `on_status`), and `outcome` where shown.
+Prometheus names. Tags: `leg` (`cce-events`, `referrals-in`, `referrals-out`), `action` (`sygnal/event/report`, `update`, `on_status`), and `outcome` where shown.
 
 | Metric | Type | Tags | Description |
 |---|---|---|---|
@@ -766,34 +721,35 @@ The existing `openmrs_emitter_poll_*` and `openmrs_emitter_checkpoint_*` metrics
 `BecknMessageLog` writes one INFO line per message when it ends, and one WARN line per retry:
 
 ```
-beckn action=update leg=cce-events messageId=9c4e… transactionId=0d5f… contractId=5b1e… eventId=3f6c… resourceType=Encounter attempt=1 result=ACK latencyMs=412
+beckn action=sygnal/event/report leg=cce-events messageId=9c4e… transactionId=0d5f… eventId=3f6c… resourceType=Encounter attempt=1 result=ACK httpStatus=202 latencyMs=412
+beckn action=on_status leg=referrals-in messageId=f1e2… transactionId=a41f… contractId=e2c9… eventId=6b7c… resourceType=ServiceRequest attempt=1 result=ACK httpStatus=200 latencyMs=180
 ```
 
 - No message bodies. No patient data: no `patientId`, no names.
 - For a `Patient` resource the resource id is the national ID, so the line carries the event id only, not the resource id.
+- `contractId` appears only on the Beckn referral legs; the Sygnal leg has no contract.
 - On `Nack` the line carries `error.code` and `error.message` from the answer.
-- Each attempt has its own `messageId`. The event id stays the same, so search by event id to follow all attempts.
-- The line also carries `httpStatus`, and `failure` when there was no answer. Values of `result`: `ACK`, `NACK`, `NO_ANSWER`, or `HTTP_<code>` when the body has no status. A retry line ends with `next=retry`; a final line is WARN when the message failed.
-- `ForwardingEngine`'s DEBUG line with the full body is on the OpenHIM path only; the Beckn path never logs a body.
+- Each attempt has its own `messageId`. The event id stays the same, so search by event id to follow all attempts and all hops.
+- Values of `result`: `ACK`, `NACK`, `NO_ANSWER`, or `HTTP_<code>` when the body has no status. A retry line ends with `next=retry`; a final line is WARN when the message failed.
 
 ### 13.3 Health
 
-In Beckn mode the `openhim` health check is not registered, so `/actuator/health` does not depend on OpenHIM. A new check, `onix`, sends a `GET` to `{bap-caller-url}/update` and `{bpp-caller-url}/on_status` (only for the legs that are on). Any HTTP answer counts as reachable (the callers take only `POST`); no answer within 5 s makes it `DOWN`. With `openhim` the checks are as before.
+In Beckn mode the `openhim` health check is not registered, so `/actuator/health` does not depend on OpenHIM. The `onix` check sends a `GET` to `{sygnal.caller-url}/sygnal/event/report` (detail `sygnal`), `{bap-caller-url}/update` (detail `bap`) and `{bpp-caller-url}/on_status` (detail `bpp`), only for the legs that are on. Any HTTP answer counts as reachable (the callers take only `POST`); no answer within 5 s makes it `DOWN`. With `openhim` the checks are as before.
 
 ---
 
 ## 14. Limits and open questions
 
-These come from §9–§11 of the central design and concern the emitter.
-
 | Topic | What it means for the emitter |
 |---|---|
 | Lost messages (Q4) | After the last try the message is dropped and the bookmark moves on, as today. A lost referral outcome means Spice never learns the patient was seen. CCE advises resending with a growing wait (1 min, 5 min, 30 min); the emitter's retries are seconds apart. Proposal: more tries first; later, do not move the bookmark past a failed resource |
 | JSON must be stable | The event id is a hash. If an enricher adds a field that changes between polls (a time, a random id), every resend looks like a new event to CCE |
+| `occurredAt` | `meta.lastUpdated`, not the clinical time (§8.1). A refetched prior order carries its old `lastUpdated` |
+| Two protocols | The CCE leg is Sygnal (`onix-openmrs`); the Spice legs stay Beckn (`onix-bap` / `onix-bpp`). Three onix callers must be reachable |
 | One HMIS peer | All outcomes of referrals from outside go to the one `spice`. Who sent a referral is not stored |
-| No `confirm` | The demo skips `confirm` before `update`. An adapter version or a network rule may later refuse this |
-| Slow answers slow the poll | Resources are sent one after another, and the HIE answer comes back through about nine hops. `onix.timeout` (50 s) must be longer than every inner hop's timeout (§10.4), or the emitter resends an event that got through. The budget is to be agreed with the HIE and CCE teams |
+| No `confirm` | The demo skips `confirm` before the Beckn `update` to Spice. An adapter version or a network rule may later refuse this |
+| Slow answers slow the poll | Resources are sent one after another, and the answer comes back through every hop. `onix.timeout` (50 s) must be longer than every inner hop's timeout (§10.4), or the emitter resends an event that got through (safe: CCE drops the repeat) |
 | Adapter behaviour untested | The answer handling relies on onix passing the far side's `Ack` / `Nack` back in the same call |
-| `eventType` values | The emitter sends the FHIR resource type. The values are to be agreed with the CCE team |
+| `eventType` values | The emitter sends the FHIR resource type |
 | Resources without a patient | Settled: skipped with a log line and a metric (§6) |
 | Health check | Settled: in Beckn mode the `onix` check replaces the OpenHIM check (§13.3) |

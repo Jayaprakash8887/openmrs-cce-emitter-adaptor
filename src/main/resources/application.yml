@@ -11,31 +11,38 @@ spring:
     timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
 
 emitter:
-  target: ${OPENMRS_EMITTER_TARGET:beckn}           # beckn (default on the demo-beckn branch) | openhim (read once at start)
+  target: ${OPENMRS_EMITTER_TARGET:beckn}           # beckn (default on this branch) | openhim (read once at start)
 
   # Read only when target=beckn. See docs/beckn-integration.md § 11.
+  # Two protocols:
+  #   - the CCE events leg (every resource to the HIE, which passes it on to CCE) uses the Sygnal action
+  #     sygnal/event/report, through OpenMRS's Sygnal onix (onix-openmrs): settings under beckn.sygnal.*;
+  #   - the Spice referral legs (referrals in: on_status, referrals out: update) use standard Beckn,
+  #     through onix-bpp / onix-bap: settings under beckn.onix.bap/bpp-caller-url, beckn.self.*, beckn.spice.*.
   # Every value can be set from the environment. The variables carry the OPENMRS_EMITTER_ prefix so
   # that this adaptor, the receiver and the OpenHIM emitter can share one env file.
-  # The ids have no defaults: the emitter does not start in Beckn mode until they are set
-  # (or use the beckn-demo profile, application-beckn-demo.yml, for the made-up example ids).
+  # Values without a default must be set before the emitter starts in Beckn mode (only those of the legs
+  # that are on), or use the beckn-demo profile, application-beckn-demo.yml, for made-up example values.
   beckn:
     onix:
-      bap-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL:http://onix-bap:8081/bap/caller}
-      bpp-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL:http://onix-bpp:8082/bpp/caller}
-      timeout: ${OPENMRS_EMITTER_BECKN_ONIX_TIMEOUT:50s}                     # outermost hop of the timeout budget
+      bap-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL:http://onix-bap:8081/bap/caller}   # referrals out: + /update
+      bpp-caller-url: ${OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL:http://onix-bpp:8082/bpp/caller}   # referrals in: + /on_status
+      timeout: ${OPENMRS_EMITTER_BECKN_ONIX_TIMEOUT:50s}                     # every leg; outermost hop of the timeout budget
     schema-base-url: ${OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL:https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema}
-    self:
+    sygnal:                                                  # CCE events leg (Sygnal)
+      caller-url: ${OPENMRS_EMITTER_BECKN_SYGNAL_CALLER_URL:http://onix-openmrs:8082/sygnal/caller}   # + /sygnal/event/report
+      id: ${OPENMRS_EMITTER_BECKN_SYGNAL_ID:bap.openmrs.nextsteps.mdtlabs.org}  # context.senderId and from.id; the subscriber id of onix-openmrs's keys
+      network-id: ${OPENMRS_EMITTER_BECKN_SYGNAL_NETWORK_ID:sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry}  # required; context.networkId
+      hie:
+        id: ${OPENMRS_EMITTER_BECKN_SYGNAL_HIE_ID:bap.openhim.nextsteps.mdtlabs.org}  # context.receiverId
+        uri: ${OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI:}                          # required; the HIE's public onix receiver base, e.g. https://hie.example.org/sygnal/receiver
+        transaction-id: ${OPENMRS_EMITTER_BECKN_SYGNAL_HIE_TRANSACTION_ID:}    # optional fixed UUID; empty = a new UUID per event
+    self:                                                    # Spice referral legs (Beckn)
       network-id: ${OPENMRS_EMITTER_BECKN_SELF_NETWORK_ID:}                  # optional; sent as context.networkId when set
       bap-id: ${OPENMRS_EMITTER_BECKN_SELF_BAP_ID:}
       bap-uri: ${OPENMRS_EMITTER_BECKN_SELF_BAP_URI:}
       bpp-id: ${OPENMRS_EMITTER_BECKN_SELF_BPP_ID:}
       bpp-uri: ${OPENMRS_EMITTER_BECKN_SELF_BPP_URI:}
-    openhim:
-      bpp-id: ${OPENMRS_EMITTER_BECKN_OPENHIM_BPP_ID:}
-      bpp-uri: ${OPENMRS_EMITTER_BECKN_OPENHIM_BPP_URI:}
-      contract-id: ${OPENMRS_EMITTER_BECKN_OPENHIM_CONTRACT_ID:}
-      transaction-id: ${OPENMRS_EMITTER_BECKN_OPENHIM_TRANSACTION_ID:}
-      commitment-file: ${OPENMRS_EMITTER_BECKN_OPENHIM_COMMITMENT_FILE:classpath:beckn/commitment-hie.json}
     spice:
       name: ${OPENMRS_EMITTER_BECKN_SPICE_NAME:Spice}
       bap-id: ${OPENMRS_EMITTER_BECKN_SPICE_BAP_ID:}
@@ -52,9 +59,9 @@ emitter:
         transaction-id: ${OPENMRS_EMITTER_BECKN_REFERRALS_OUT_TRANSACTION_ID:}
         commitment-file: ${OPENMRS_EMITTER_BECKN_REFERRALS_OUT_COMMITMENT_FILE:classpath:beckn/commitment-referral.json}
     legs:
-      cce-events: ${OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS:true}
-      referrals-in: ${OPENMRS_EMITTER_BECKN_LEG_REFERRALS_IN:true}
-      referrals-out: ${OPENMRS_EMITTER_BECKN_LEG_REFERRALS_OUT:true}
+      cce-events: ${OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS:true}               # Sygnal, to the HIE
+      referrals-in: ${OPENMRS_EMITTER_BECKN_LEG_REFERRALS_IN:true}           # Beckn on_status, to Spice
+      referrals-out: ${OPENMRS_EMITTER_BECKN_LEG_REFERRALS_OUT:true}         # Beckn update, to Spice
   openmrs:
     name: "${OPENMRS_NAME:openmrs}"
     base-url: "${OPENMRS_BASE_URL:http://localhost:8080/openmrs}"

@@ -7,7 +7,7 @@ The **OpenMRS CCE Emitter Adaptor** is a **Spring Boot 3.4 / Java 21** microserv
 It uses **polling** because OpenMRS does not support FHIR Subscriptions:
 - **FHIR R4 API** (`_lastUpdated` queries) for all resource types including Orders (via `ServiceRequest`/`MedicationRequest`) and Visits (via tagged `Encounter`)
 
-**Beckn mode (implemented on `demo-beckn`, not yet tested against real onix).** On this branch the emitter runs in Beckn mode by default (`OPENMRS_EMITTER_TARGET=beckn`): it sends Beckn messages through the `openmrs-onix` adapter instead of FHIR to OpenHIM: every resource to the HIE (which passes it on to CCE), and referrals and their outcomes straight to Spice. Set `OPENMRS_EMITTER_TARGET=openhim` to keep today's OpenHIM path, unchanged. See [docs/beckn-integration.md](docs/beckn-integration.md).
+**Beckn mode (Sygnal, implemented on `sygnal-actions`, not yet tested against real onix).** On this branch the emitter runs in Beckn mode by default (`OPENMRS_EMITTER_TARGET=beckn`): instead of FHIR to OpenHIM, it sends every resource to the HIE as the Sygnal action `sygnal/event/report`, through its own Sygnal onix adapter (`onix-openmrs`); the HIE passes it on to CCE. Referrals and their outcomes still go straight to Spice as standard Beckn messages (`update` / `on_status` through `openmrs-onix`), unchanged. Set `OPENMRS_EMITTER_TARGET=openhim` to keep today's OpenHIM path, unchanged. See [docs/beckn-integration.md](docs/beckn-integration.md).
 
 ## Tech Stack
 
@@ -92,7 +92,7 @@ src/main/java/org/openphc/cce/emitter/
 | [Deployment Guide](docs/deployment-guide.md) | Build, Docker, checklist |
 | [API Reference](docs/api-reference.md) | Actuator endpoints, metrics, consumed APIs |
 | [Operations Runbook](docs/operations-runbook.md) | Troubleshooting, alerts, monitoring |
-| [Beckn Integration](docs/beckn-integration.md) | Beckn mode: flows, messages, settings |
+| [Beckn Integration](docs/beckn-integration.md) | Beckn mode (CCE leg: Sygnal `sygnal/event/report`; Spice legs: Beckn): flows, messages, settings |
 
 ## Key Environment Variables
 

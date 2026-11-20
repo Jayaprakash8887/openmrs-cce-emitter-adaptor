@@ -61,39 +61,60 @@ public class EmitterProperties {
         private OnixConfig onix = new OnixConfig();
         /** Base of the {@code CceClinicalEvent} {@code @context} URL. */
         private String schemaBaseUrl = "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema";
+        /** The CCE events leg: Sygnal {@code sygnal/event/report} to the HIE. */
+        private SygnalConfig sygnal = new SygnalConfig();
+        /** OpenMRS's own Beckn ids, for the Spice referral legs (standard Beckn). */
         private BecknSelfConfig self = new BecknSelfConfig();
-        private BecknOpenhimConfig openhim = new BecknOpenhimConfig();
         private BecknSpiceConfig spice = new BecknSpiceConfig();
         private BecknLegsConfig legs = new BecknLegsConfig();
     }
 
     @Data
     public static class OnixConfig {
-        /** {@code onix-bap} caller base URL; the emitter appends {@code /update}. */
+        /** {@code onix-bap} caller base URL; the emitter appends {@code /update} (referrals out). */
         private String bapCallerUrl = "http://onix-bap:8081/bap/caller";
-        /** {@code onix-bpp} caller base URL; the emitter appends {@code /on_status}. */
+        /** {@code onix-bpp} caller base URL; the emitter appends {@code /on_status} (referrals in). */
         private String bppCallerUrl = "http://onix-bpp:8082/bpp/caller";
-        /** Wait for one answer. The outermost hop of the timeout budget. */
+        /** Wait for one answer, on every leg. The outermost hop of the timeout budget. */
         private Duration timeout = Duration.ofSeconds(50);
+    }
+
+    /** Settings of the CCE events leg, which uses the Sygnal action {@code sygnal/event/report}. */
+    @Data
+    public static class SygnalConfig {
+        /**
+         * Sygnal caller base URL of this emitter's onix ({@code onix-openmrs}); the emitter appends the
+         * action, {@code /sygnal/event/report}.
+         */
+        private String callerUrl = "http://onix-openmrs:8082/sygnal/caller";
+        /** OpenMRS's Sygnal subscriber id: {@code context.senderId} and {@code from.id}. */
+        private String id = "bap.openmrs.nextsteps.mdtlabs.org";
+        /** Required. Sent as {@code context.networkId}. */
+        private String networkId;
+        private SygnalHieConfig hie = new SygnalHieConfig();
+    }
+
+    @Data
+    public static class SygnalHieConfig {
+        /** The HIE's subscriber id: {@code context.receiverId}. */
+        private String id = "bap.openhim.nextsteps.mdtlabs.org";
+        /** The HIE's public onix receiver base: {@code context.receiverUri} (onix appends the action). */
+        private String uri;
+        /**
+         * Optional fixed {@code context.transactionId} (a UUID). When blank, every event gets a new
+         * random UUID, kept across the retries of that event.
+         */
+        private String transactionId;
     }
 
     @Data
     public static class BecknSelfConfig {
-        /** Optional; sent as {@code context.networkId} when set. */
+        /** Optional; sent as {@code context.networkId} on the referral legs when set. */
         private String networkId;
         private String bapId;
         private String bapUri;
         private String bppId;
         private String bppUri;
-    }
-
-    @Data
-    public static class BecknOpenhimConfig {
-        private String bppId;
-        private String bppUri;
-        private String contractId;
-        private String transactionId;
-        private String commitmentFile = "classpath:beckn/commitment-hie.json";
     }
 
     @Data
@@ -118,8 +139,11 @@ public class EmitterProperties {
 
     @Data
     public static class BecknLegsConfig {
+        /** Clinical events to the HIE (Sygnal), which passes them on to CCE. */
         private boolean cceEvents = true;
+        /** Referral outcomes to Spice (Beckn {@code on_status}). */
         private boolean referralsIn = true;
+        /** Referrals out to Spice (Beckn {@code update}). */
         private boolean referralsOut = true;
     }
 

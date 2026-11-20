@@ -8,21 +8,31 @@ import java.util.List;
 /** The example settings of docs/beckn-integration.md § 11. */
 final class BecknTestSettings {
 
+    static final String SYGNAL_ID = "bap.openmrs.nextsteps.mdtlabs.org";
+    static final String HIE_ID = "bap.openhim.nextsteps.mdtlabs.org";
+    static final String HIE_URI = "https://hie.example.org/sygnal/receiver";
+    static final String NETWORK_ID = "sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry";
+    static final String TRANSACTION_ID = "0d5f8c1a-7b2e-4f6d-9a3c-1e2b3c4d5e6f";
+
     private BecknTestSettings() {
     }
 
+    /** Complete settings for all three legs; the Sygnal leg has a fixed transaction id. */
     static EmitterProperties properties() {
         EmitterProperties p = new EmitterProperties();
         p.setTarget(EmitterProperties.Target.BECKN);
         BecknConfig b = p.getBeckn();
+        // CCE events leg (Sygnal)
+        b.getSygnal().setId(SYGNAL_ID);
+        b.getSygnal().setNetworkId(NETWORK_ID);
+        b.getSygnal().getHie().setId(HIE_ID);
+        b.getSygnal().getHie().setUri(HIE_URI);
+        b.getSygnal().getHie().setTransactionId(TRANSACTION_ID);
+        // Spice referral legs (Beckn)
         b.getSelf().setBapId("bap.openmrs.example.org");
         b.getSelf().setBapUri("https://openmrs.example.org/bap/receiver");
         b.getSelf().setBppId("bpp.openmrs.example.org");
         b.getSelf().setBppUri("https://openmrs.example.org/bpp/receiver");
-        b.getOpenhim().setBppId("bpp.openhim.example.org");
-        b.getOpenhim().setBppUri("https://hie.example.org/bpp/receiver");
-        b.getOpenhim().setContractId("5b1e7f3c-2a4d-4c6e-8f90-a1b2c3d4e5f6");
-        b.getOpenhim().setTransactionId("0d5f8c1a-7b2e-4f6d-9a3c-1e2b3c4d5e6f");
         var peer = b.getSpice();
         peer.setBapId("bap.spice.example.org");
         peer.setBapUri("https://spice.example.org/bap/receiver");

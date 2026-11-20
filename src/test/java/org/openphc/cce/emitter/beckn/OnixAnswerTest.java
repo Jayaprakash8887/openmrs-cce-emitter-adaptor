@@ -9,15 +9,21 @@ class OnixAnswerTest {
 
     private static final String ACK = "{\"message\":{\"status\":\"ACK\",\"messageId\":\"m\"}}";
     private static final String NACK = "{\"message\":{\"status\":\"NACK\",\"messageId\":\"m\","
-            + "\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"performance[0].id is required\"}}}";
+            + "\"error\":{\"code\":\"SCH_REQUIRED_FIELD_MISSING\",\"message\":\"events[0].id is missing\"}}}";
     private static final String NACK_500 = "{\"message\":{\"status\":\"NACK\",\"messageId\":\"m\","
-            + "\"error\":{\"code\":\"COLLECTOR_UNAVAILABLE\",\"message\":\"down\"}}}";
+            + "\"error\":{\"code\":\"NET_DOWNSTREAM_UNAVAILABLE\",\"message\":\"down\"}}}";
 
     @Test
     void ok200AckIsAck() {
         OnixAnswer a = OnixAnswer.of(200, ACK);
         assertEquals(Verdict.ACK, a.verdict());
         assertEquals("ACK", a.result());
+    }
+
+    @Test
+    void accepted202AckIsAck() {
+        assertEquals(Verdict.ACK, OnixAnswer.of(202, ACK).verdict());
+        assertEquals(Verdict.ACK, OnixAnswer.of(202, null).verdict());
     }
 
     @Test
@@ -29,8 +35,8 @@ class OnixAnswerTest {
     void http400NackIsNackWithError() {
         OnixAnswer a = OnixAnswer.of(400, NACK);
         assertEquals(Verdict.NACK, a.verdict());
-        assertEquals("BAD_REQUEST", a.errorCode());
-        assertEquals("performance[0].id is required", a.errorMessage());
+        assertEquals("SCH_REQUIRED_FIELD_MISSING", a.errorCode());
+        assertEquals("events[0].id is missing", a.errorMessage());
     }
 
     @Test

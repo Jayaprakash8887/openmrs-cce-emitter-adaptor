@@ -16,9 +16,10 @@ import java.util.List;
 
 /**
  * Entry point of Beckn mode (docs/beckn-integration.md § 4). Called by {@code FhirPollerService}
- * in place of {@code ForwardingEngine} with the enriched resource JSON. Sends {@code update} to the
- * HIE and, for a referral, one message to the HMIS peer; each message is sent and retried on its
- * own. The result is a success only if every message got {@code Ack}.
+ * in place of {@code ForwardingEngine} with the enriched resource JSON. Sends the Sygnal action
+ * {@code sygnal/event/report} to the HIE (which passes it on to CCE) and, for a referral, one Beckn
+ * message to the HMIS peer; each message is sent and retried on its own. The result is a success
+ * only if every message got {@code Ack}.
  *
  * <p>A resource with no patient (for example {@code Location}, {@code Practitioner}) is skipped:
  * {@code patientId} is required by the {@code CceClinicalEvent} box.
@@ -75,7 +76,7 @@ public class BecknTargetForwarder {
         List<OnixClient.SendResult> results = new ArrayList<>();
 
         if (legs.isCceEvents()) {
-            results.add(onixClient.send(messageBuilder.hieUpdate(resource, eventId, patientId)));
+            results.add(onixClient.send(messageBuilder.eventReport(resource, eventId, patientId)));
         }
 
         ReferralClassifier.Decision decision = referralClassifier.classify(resource);

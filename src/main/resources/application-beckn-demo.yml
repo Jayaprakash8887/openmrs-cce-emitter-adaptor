@@ -1,17 +1,20 @@
-# Example Beckn settings (docs/beckn-integration.md § 11). All hosts and ids are made up.
+# Example Beckn settings (docs/beckn-integration.md § 11). The network id, hosts and Beckn ids are made up.
 # Activate with SPRING_PROFILES_ACTIVE=beckn-demo (Beckn is the default target on this branch), or copy into your own profile.
 emitter:
   beckn:
+    # CCE events leg (Sygnal sygnal/event/report to the HIE)
+    sygnal:
+      id: bap.openmrs.nextsteps.mdtlabs.org
+      network-id: sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry
+      hie:
+        id: bap.openhim.nextsteps.mdtlabs.org
+        uri: https://hie.example.org/sygnal/receiver
+    # Spice referral legs (standard Beckn)
     self:
       bap-id: bap.openmrs.example.org
       bap-uri: https://openmrs.example.org/bap/receiver
       bpp-id: bpp.openmrs.example.org
       bpp-uri: https://openmrs.example.org/bpp/receiver
-    openhim:
-      bpp-id: bpp.openhim.example.org
-      bpp-uri: https://hie.example.org/bpp/receiver
-      contract-id: 5b1e7f3c-2a4d-4c6e-8f90-a1b2c3d4e5f6
-      transaction-id: 0d5f8c1a-7b2e-4f6d-9a3c-1e2b3c4d5e6f
     spice:
       name: Spice
       bap-id: bap.spice.example.org

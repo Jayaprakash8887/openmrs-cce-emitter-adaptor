@@ -98,7 +98,7 @@ public class FhirPollerService {
         this.meterRegistry = meterRegistry;
         this.becknTargetForwarder = becknTargetForwarder.getIfAvailable();
         if (this.becknTargetForwarder != null) {
-            log.info("Output target: beckn (openmrs-onix callers)");
+            log.info("Output target: beckn (Sygnal sygnal/event/report to the HIE; Beckn referral legs to Spice)");
         }
     }
 
