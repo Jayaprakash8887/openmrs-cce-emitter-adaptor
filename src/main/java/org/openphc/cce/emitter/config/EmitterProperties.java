@@ -8,7 +8,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 
 @Data
@@ -62,65 +61,46 @@ public class EmitterProperties {
         /** Base of the {@code CceClinicalEvent} {@code @context} URL. */
         private String schemaBaseUrl = "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema";
         private BecknSelfConfig self = new BecknSelfConfig();
-        private BecknOpenhimConfig openhim = new BecknOpenhimConfig();
-        private BecknSpiceConfig spice = new BecknSpiceConfig();
+        private BecknHieConfig hie = new BecknHieConfig();
         private BecknLegsConfig legs = new BecknLegsConfig();
     }
 
     @Data
     public static class OnixConfig {
-        /** {@code onix-bap} caller base URL; the emitter appends {@code /update}. */
-        private String bapCallerUrl = "http://onix-bap:8081/bap/caller";
-        /** {@code onix-bpp} caller base URL; the emitter appends {@code /on_status}. */
-        private String bppCallerUrl = "http://onix-bpp:8082/bpp/caller";
+        /**
+         * Sygnal caller base URL of this emitter's onix ({@code onix-openmrs}); the emitter appends the
+         * action, {@code /sygnal/event/report}.
+         */
+        private String callerUrl = "http://onix-openmrs:8082/sygnal/caller";
         /** Wait for one answer. The outermost hop of the timeout budget. */
         private Duration timeout = Duration.ofSeconds(50);
     }
 
     @Data
     public static class BecknSelfConfig {
-        /** Optional; sent as {@code context.networkId} when set. */
+        /** OpenMRS's subscriber id: {@code context.senderId} and {@code from.id}. */
+        private String id = "bap.openmrs.nextsteps.mdtlabs.org";
+        /** Required. Sent as {@code context.networkId}. */
         private String networkId;
-        private String bapId;
-        private String bapUri;
-        private String bppId;
-        private String bppUri;
     }
 
     @Data
-    public static class BecknOpenhimConfig {
-        private String bppId;
-        private String bppUri;
-        private String contractId;
+    public static class BecknHieConfig {
+        /** The HIE's subscriber id: {@code context.receiverId}. */
+        private String id = "bap.openhim.nextsteps.mdtlabs.org";
+        /** The HIE's public onix receiver base: {@code context.receiverUri} (onix appends the action). */
+        private String uri;
+        /**
+         * Optional fixed {@code context.transactionId} (a UUID). When blank, every event gets a new
+         * random UUID, kept across the retries of that event.
+         */
         private String transactionId;
-        private String commitmentFile = "classpath:beckn/commitment-hie.json";
-    }
-
-    @Data
-    public static class BecknSpiceConfig {
-        private String name = "Spice";
-        private String bapId;
-        private String bapUri;
-        private String bppId;
-        private String bppUri;
-        /** Destination facility codes the peer serves. */
-        private List<String> facilityCodes = new ArrayList<>();
-        private BecknContractConfig referralsIn = new BecknContractConfig();
-        private BecknContractConfig referralsOut = new BecknContractConfig();
-    }
-
-    @Data
-    public static class BecknContractConfig {
-        private String contractId;
-        private String transactionId;
-        private String commitmentFile = "classpath:beckn/commitment-referral.json";
     }
 
     @Data
     public static class BecknLegsConfig {
+        /** Clinical events to the HIE (which passes them on to CCE). The only leg. */
         private boolean cceEvents = true;
-        private boolean referralsIn = true;
-        private boolean referralsOut = true;
     }
 
     @Data

@@ -423,7 +423,7 @@ All three operations are idempotent and only apply to `ServiceRequest`. `Medicat
 | Perform compliance tracking | CCE Compliance Service responsibility |
 | Subscribe to FHIR Subscriptions | OpenMRS does not support FHIR R4 Subscriptions |
 | Act as a Receiver Adaptor | Only emits events toward CCE, does not receive from CCE |
-| Receive Beckn callbacks | In Beckn mode, `on_update` and `on_status` callbacks go to the receiver adaptor (§13) |
+| Receive Beckn callbacks | In Beckn mode there are none: `sygnal/event/report` is answered synchronously (§13) |
 | Detect deleted/voided records | Planned as future enhancement |
 
 ---
@@ -438,31 +438,30 @@ All three operations are idempotent and only apply to `ServiceRequest`. `Medicat
 
 ## 13. Beckn Mode
 
-> **Status:** Implemented on branch `demo-beckn` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. Full design: [beckn-integration.md](beckn-integration.md).
+> **Status:** Implemented on branch `sygnal-actions` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. Full design: [beckn-integration.md](beckn-integration.md).
 
-A new setting, `OPENMRS_EMITTER_TARGET` (`emitter.target`), chooses the output path. With `openhim` everything in sections 1–12 stays as it is. On the `demo-beckn` branch the default is `beckn`. With `beckn`, the emitter posts Beckn messages to the `openmrs-onix` adapter containers instead of FHIR to OpenHIM.
+A setting, `OPENMRS_EMITTER_TARGET` (`emitter.target`), chooses the output path. With `openhim` everything in sections 1–12 stays as it is. On this branch the default is `beckn`. With `beckn`, the emitter sends each resource to the HIE as the Sygnal action `sygnal/event/report`, through its own onix container (`onix-openmrs`), instead of FHIR to OpenHIM.
 
 ```
   OpenMRS ──(FHIR R4 API)──► ★ OpenMRS Emitter Adaptor ★  (OPENMRS_EMITTER_TARGET=beckn)
-                                     │                │
-             update (every resource) │                │ on_status / update (referrals only)
-                                     ▼                ▼
-                      onix-bap /bap/caller    onix-bpp /bpp/caller, onix-bap /bap/caller
-                                     │                │
-                                     ▼                ▼
-               HIE (OpenHIM's Beckn adapter)        Spice
-               → OpenHIM channel → mediator → CCE
+                                     │
+             sygnal/event/report     │  (every resource)
+                                     ▼
+                onix-openmrs /sygnal/caller/sygnal/event/report
+                                     │  signed, delivered to context.receiverUri
+                                     ▼
+               HIE (OpenHIM emitter adaptor) ──sygnal/event/report──► CCE
 ```
 
-| Message | When | Contract | Through |
-|---|---|---|---|
-| `update` to the HIE | Every resource | HIE feed | `onix-bap` |
-| `on_status` to Spice | `ServiceRequest` with `referral-response`, status `completed` / `revoked` | Referrals in | `onix-bpp` |
-| `update` to Spice | `ServiceRequest` marked `outbound`, destination facility code served by Spice | Referrals out | `onix-bap` |
+| Message | When | Through |
+|---|---|---|
+| `sygnal/event/report` to the HIE | Every resource with a patient | `onix-openmrs` |
 
-Polling, enrichers, `PatientReferenceRewriter`, `CheckpointStore` and the retry settings are shared by both modes. The emitter builds no CloudEvent in Beckn mode; the HIE's mediator still does that.
+The Spice referral legs (`on_status`, `update` to Spice) are removed. Referral `ServiceRequest`s reach CCE through the HIE like every other resource; the referral enrichers still mark them.
 
-Each message carries exactly one performance entry. Its id is the event id: a 36-character name-based UUID of the resource hash, so a corrected resource gets a new id. Answers follow CCE's `Ack` / `Nack` shape: `200` + `ACK` is success, `400` / `NACK` fails with no retry, and `500`, `408`, `429` or no answer is retried with the same id and a new `messageId`. The emitter waits up to 50 s for one answer, the outermost hop in the chain ([beckn-integration.md](beckn-integration.md) § 10).
+Polling, enrichers, `PatientReferenceRewriter`, `CheckpointStore` and the retry settings are shared by both modes. The emitter builds no CloudEvent in Beckn mode; the HIE still does that.
+
+Each message carries exactly one `sygnal:CoordinationEvent`. Its id is the event id: a 36-character name-based UUID of the resource hash, so a corrected resource gets a new id. `202` + `ACK` (any 2xx not `NACK`) is success, `400` / `NACK` fails with no retry, and `500`, `408`, `429` or no answer is retried with the same id and a new `messageId`. No callback follows. The emitter waits up to 50 s for one answer, the outermost hop in the chain ([beckn-integration.md](beckn-integration.md) § 10).
 
 ### 13.1 Where the New Classes Sit
 
@@ -471,7 +470,7 @@ Package: `org.openphc.cce.emitter.beckn`. Its beans exist only when `OPENMRS_EMI
 ```
 src/main/java/org/openphc/cce/emitter/
 ├── config/
-│   └── EmitterProperties.java          # + target, + beckn.* (onix, self, openhim, spice, legs)
+│   └── EmitterProperties.java          # + target, + beckn.* (onix, self, hie, legs)
 ├── service/
 │   └── FhirPollerService.java          # forwardOne → ForwardingEngine or BecknTargetForwarder
 ├── health/
@@ -480,20 +479,19 @@ src/main/java/org/openphc/cce/emitter/
     ├── BecknTargetForwarder.java       # Beckn-mode entry point; returns ForwardResult
     ├── EventIdFactory.java             # sorted-key JSON → SHA-256 → name-based UUID
     ├── PatientIdReader.java            # subject/patient reference, or a Patient's national ID
-    ├── ReferralClassifier.java         # decides the Spice message, if any
-    ├── BecknMessageBuilder.java        # context, contract, CceClinicalEvent box
-    ├── OnixClient.java                 # posts to onix callers; Ack / Nack; retries
+    ├── BecknMessageBuilder.java        # sygnal/event/report: context, CoordinationEvent, CceClinicalEvent box
+    ├── OnixClient.java                 # posts to the onix Sygnal caller; Ack / Nack; retries
     ├── OnixAnswer.java                 # Ack / Nack / retry decision for one answer
     ├── OutgoingMessage.java            # one message; new messageId per attempt
     ├── BecknConfiguration.java         # onix HTTP client; start-up settings check
-    ├── BecknSettingsValidator.java     # names every missing setting
+    ├── BecknSettingsValidator.java     # names every missing or wrong setting
     └── BecknMessageLog.java            # one log line per message, no bodies
 ```
 
 | Layer | Today | Beckn mode adds |
 |---|---|---|
 | Polling | `FhirPollerService` | — |
-| Forwarding | `ForwardingEngine` (OpenHIM) | `BecknTargetForwarder`, `ReferralClassifier`, `BecknMessageBuilder`, `OnixClient` |
+| Forwarding | `ForwardingEngine` (OpenHIM) | `BecknTargetForwarder`, `BecknMessageBuilder`, `OnixClient` |
 | Support | `CheckpointStore`, `AuthService`, `EmitterProperties` | `EventIdFactory`, `PatientIdReader`, `BecknMessageLog` |
 
-The emitter exposes no new endpoint. Callbacks (`on_update`, Spice's `on_status`) go to the receiver adaptor.
+The emitter exposes no new endpoint, and no callback comes back to it.

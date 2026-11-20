@@ -21,10 +21,13 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Posts one Beckn message to an {@code onix} caller and reads the answer
- * (docs/beckn-integration.md § 10). A 5xx, 408, 429, timeout or connection error is retried with
- * {@code emitter.openhim.retry.*} (linear backoff: backoff × attempt). Every attempt has a new
- * {@code messageId}; the performance id stays the same. Records the {@code openmrs.beckn.*} metrics.
+ * Posts one Sygnal message to the {@code onix} Sygnal caller and reads the answer
+ * (docs/beckn-integration.md § 10). The URL is built as plain text ({@code caller-url + "/" + action}),
+ * never with the action as a URI template variable, so the slashes of {@code sygnal/event/report}
+ * are not encoded as {@code %2F}. A 5xx, 408, 429, timeout or connection error is retried with
+ * {@code emitter.openhim.retry.*} (linear backoff: backoff × attempt); a 4xx {@code Nack} is final.
+ * Every attempt has a new {@code messageId}; the event id stays the same. Records the
+ * {@code openmrs.beckn.*} metrics.
  */
 @Component
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)

@@ -100,37 +100,28 @@ Trigger condition: classification fires when **all** of the following are true �
 
 ### Output Target and Beckn
 
-> **Status:** Implemented on branch `demo-beckn` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. See [beckn-integration.md](beckn-integration.md) § 11 for the full YAML.
+> **Status:** Implemented on branch `sygnal-actions` (package `org.openphc.cce.emitter.beckn`). Not yet tested against real onix containers. See [beckn-integration.md](beckn-integration.md) § 11 for the full YAML.
 >
-> With `OPENMRS_EMITTER_TARGET=beckn` the emitter fails to start if a required id is missing; the error names each missing setting. Only the settings of the legs that are on are required. The ids have no defaults; `application-beckn-demo.yml` (profile `beckn-demo`) holds the made-up example values.
+> In Beckn mode the emitter sends each event to the HIE as the Sygnal action `sygnal/event/report`, through its own onix (`onix-openmrs`). With `OPENMRS_EMITTER_TARGET=beckn` it fails to start if a required setting is missing or wrong; the error names each one. `self.network-id` and `hie.uri` have no defaults; `application-beckn-demo.yml` (profile `beckn-demo`) holds example values.
 
 With `OPENMRS_EMITTER_TARGET=openhim` the emitter posts FHIR to OpenHIM as described above, and none of the `emitter.beckn.*` settings are read.
 
 | Property | Env Var | Default | Description |
 |----------|---------|---------|-------------|
-| `emitter.target` | `OPENMRS_EMITTER_TARGET` | `beckn` (on `demo-beckn`) | `openhim` (today's path) or `beckn` (post Beckn messages to `openmrs-onix`) |
-| `emitter.beckn.onix.bap-caller-url` | `OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL` | `http://onix-bap:8081/bap/caller` | `onix-bap` caller. Used for `update` to the HIE and to Spice |
-| `emitter.beckn.onix.bpp-caller-url` | `OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL` | `http://onix-bpp:8082/bpp/caller` | `onix-bpp` caller. Used for `on_status` to Spice |
+| `emitter.target` | `OPENMRS_EMITTER_TARGET` | `beckn` (on this branch) | `openhim` (today's path) or `beckn` (post `sygnal/event/report` to `onix-openmrs`) |
+| `emitter.beckn.onix.caller-url` | `OPENMRS_EMITTER_BECKN_ONIX_CALLER_URL` | `http://onix-openmrs:8082/sygnal/caller` | onix Sygnal caller. The emitter appends `/sygnal/event/report` |
 | `emitter.beckn.onix.timeout` | `OPENMRS_EMITTER_BECKN_ONIX_TIMEOUT` | `50s` | Wait for one onix answer. The outermost hop: longer than every hop behind it ([beckn-integration.md](beckn-integration.md) § 10.4) |
 | `emitter.beckn.schema-base-url` | `OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL` | `https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema` | Base URL of the `CceClinicalEvent` schema. The files are in the cce-beckn-service `schema/` folder |
-| `emitter.beckn.self.network-id` | `OPENMRS_EMITTER_BECKN_SELF_NETWORK_ID` | — | Optional. Sent as `context.networkId` when set |
-| `emitter.beckn.self.bap-id` / `bap-uri` | `OPENMRS_EMITTER_BECKN_SELF_BAP_ID` / `OPENMRS_EMITTER_BECKN_SELF_BAP_URI` | — | OpenMRS's consumer (BAP) id and receiver URI |
-| `emitter.beckn.self.bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_SELF_BPP_ID` / `OPENMRS_EMITTER_BECKN_SELF_BPP_URI` | — | OpenMRS's provider (BPP) id and receiver URI |
-| `emitter.beckn.openhim.bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_OPENHIM_BPP_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_BPP_URI` | — | OpenHIM's Beckn adapter (provider of the HIE feed) |
-| `emitter.beckn.openhim.contract-id` / `transaction-id` | `OPENMRS_EMITTER_BECKN_OPENHIM_CONTRACT_ID` / `OPENMRS_EMITTER_BECKN_OPENHIM_TRANSACTION_ID` | — | HIE feed contract ids. Any stable non-blank values; OpenHIM accepts any and echoes them |
-| `emitter.beckn.openhim.commitment-file` | `OPENMRS_EMITTER_BECKN_OPENHIM_COMMITMENT_FILE` | `classpath:beckn/commitment-hie.json` | Commitment sent in every HIE message. OpenHIM's own (example id `hie-event-feed`) |
-| `emitter.beckn.spice.name` | `OPENMRS_EMITTER_BECKN_SPICE_NAME` | `Spice` | The one HMIS peer |
-| `emitter.beckn.spice.bap-id` / `bap-uri` / `bpp-id` / `bpp-uri` | `OPENMRS_EMITTER_BECKN_SPICE_BAP_ID`, `…_BAP_URI`, `…_BPP_ID`, `…_BPP_URI` | — | The peer's Beckn ids and receiver URIs |
-| `emitter.beckn.spice.facility-codes` | `OPENMRS_EMITTER_BECKN_SPICE_FACILITY_CODES` (comma-separated) | — | Destination facility codes the peer serves. A referral out goes to the peer only if its `performer` facility code is in this list |
-| `emitter.beckn.spice.referrals-in.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_IN_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `on_status` to the peer. Agreed with the peer; the receiver does not check incoming contract ids |
-| `emitter.beckn.spice.referrals-out.*` | `OPENMRS_EMITTER_BECKN_REFERRALS_OUT_CONTRACT_ID`, `…_TRANSACTION_ID`, `…_COMMITMENT_FILE` | — | `contract-id`, `transaction-id`, `commitment-file` for `update` to the peer. Issued by the peer's admin |
+| `emitter.beckn.self.id` | `OPENMRS_EMITTER_BECKN_SELF_ID` | `bap.openmrs.nextsteps.mdtlabs.org` | OpenMRS's subscriber id: `context.senderId` and `from.id`. Must match the keys in `onix-openmrs` |
+| `emitter.beckn.self.network-id` | `OPENMRS_EMITTER_BECKN_SELF_NETWORK_ID` | — | Required. `context.networkId` |
+| `emitter.beckn.hie.id` | `OPENMRS_EMITTER_BECKN_HIE_ID` | `bap.openhim.nextsteps.mdtlabs.org` | The HIE's subscriber id: `context.receiverId` |
+| `emitter.beckn.hie.uri` | `OPENMRS_EMITTER_BECKN_HIE_URI` | — | Required. The HIE's public onix receiver base, e.g. `https://hie.example.org/sygnal/receiver`: `context.receiverUri` |
+| `emitter.beckn.hie.transaction-id` | `OPENMRS_EMITTER_BECKN_HIE_TRANSACTION_ID` | — | Optional fixed `context.transactionId` (a UUID). Empty: a new UUID per event |
 | `emitter.beckn.legs.cce-events` | `OPENMRS_EMITTER_BECKN_LEG_CCE_EVENTS` | `true` | Send every resource to the HIE |
-| `emitter.beckn.legs.referrals-in` | `OPENMRS_EMITTER_BECKN_LEG_REFERRALS_IN` | `true` | Send referral outcomes to the peer |
-| `emitter.beckn.legs.referrals-out` | `OPENMRS_EMITTER_BECKN_LEG_REFERRALS_OUT` | `true` | Send referrals out to the peer |
 
-Beckn mode reuses `emitter.openhim.retry.max-attempts` and `emitter.openhim.retry.backoff-ms`. Raise them above `3` and `2000` in Beckn mode: a message is dropped after the last try. CCE advises a growing wait (1 min, 5 min, 30 min); these retries are still seconds apart (open question Q4). The other `emitter.openhim.*` settings are not used in Beckn mode.
+Beckn mode reuses `emitter.openhim.retry.max-attempts` and `emitter.openhim.retry.backoff-ms` for 5xx answers and timeouts; a 4xx `Nack` is never retried. Raise them above `3` and `2000` in Beckn mode: a message is dropped after the last try. CCE advises a growing wait (1 min, 5 min, 30 min); these retries are still seconds apart. The other `emitter.openhim.*` settings are not used in Beckn mode.
 
-The referral classifier reads the existing `emitter.referral.response.category-system`, `emitter.referral.direction.category-system` and `emitter.referral.direction.destination-identifier-system` settings. Do not change them without telling the HIE and Spice.
+The Spice settings (`emitter.beckn.spice.*`, `legs.referrals-in`, `legs.referrals-out`), the Beckn contract settings (`emitter.beckn.openhim.*`, commitment files) and the bap/bpp ids and callers are removed. The OpenMRS side sends only to the HIE.
 
 ### Checkpoint
 
@@ -192,14 +183,17 @@ LOG_LEVEL_ROOT=WARN
 
 ```bash
 OPENMRS_EMITTER_TARGET=beckn
-OPENMRS_EMITTER_BECKN_ONIX_BAP_CALLER_URL=http://onix-bap:8081/bap/caller
-OPENMRS_EMITTER_BECKN_ONIX_BPP_CALLER_URL=http://onix-bpp:8082/bpp/caller
+OPENMRS_EMITTER_BECKN_ONIX_CALLER_URL=http://onix-openmrs:8082/sygnal/caller
 OPENMRS_EMITTER_BECKN_SCHEMA_BASE_URL=https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema
+OPENMRS_EMITTER_BECKN_SELF_ID=bap.openmrs.nextsteps.mdtlabs.org
+OPENMRS_EMITTER_BECKN_SELF_NETWORK_ID=sygnal.nextsteps.mdtlabs.org/sygnal_demo_network_registry
+OPENMRS_EMITTER_BECKN_HIE_ID=bap.openhim.nextsteps.mdtlabs.org
+OPENMRS_EMITTER_BECKN_HIE_URI=https://hie.example.org/sygnal/receiver
 OPENHIM_RETRY_MAX_ATTEMPTS=6
 OPENHIM_RETRY_BACKOFF_MS=5000
 ```
 
-The Beckn ids, contract ids and facility codes are set with the `OPENMRS_EMITTER_BECKN_*` variables in the table above, or in YAML (for example a profile file), as shown in [beckn-integration.md](beckn-integration.md) § 11. The `OPENMRS_EMITTER_` prefix keeps them apart from the receiver's (`OPENMRS_RECEIVER_`) and the OpenHIM emitter's (`OPENHIM_EMITTER_`) when all three share one env file.
+The network id and the HIE's receiver URI must be set; the HIE host above is made up. They can also be set in YAML (for example a profile file), as shown in [beckn-integration.md](beckn-integration.md) § 11. The `OPENMRS_EMITTER_` prefix keeps them apart from the receiver's (`OPENMRS_RECEIVER_`) and the OpenHIM emitter's (`OPENHIM_EMITTER_`) when all three share one env file.
 
 ---
 

@@ -1,10 +1,11 @@
 package org.openphc.cce.emitter.beckn;
 
-/** The three Beckn legs the emitter sends on. The tag value is used in metrics and log lines. */
+/**
+ * The leg the emitter sends on: clinical events to the HIE, which passes them on to CCE. The tag
+ * value is used in metrics and log lines.
+ */
 public enum Leg {
-    CCE_EVENTS("cce-events"),
-    REFERRALS_IN("referrals-in"),
-    REFERRALS_OUT("referrals-out");
+    CCE_EVENTS("cce-events");
 
     private final String tag;
 

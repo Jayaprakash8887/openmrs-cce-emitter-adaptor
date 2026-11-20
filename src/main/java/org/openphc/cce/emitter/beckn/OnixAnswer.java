@@ -6,9 +6,10 @@ import com.fasterxml.jackson.databind.JsonNode;
  * What {@code onix} answered to one attempt (docs/beckn-integration.md § 10). The adapter passes
  * the far side's {@code Ack} / {@code Nack} back in the same call:
  * {@code {"message":{"status":"ACK"|"NACK","messageId":…,"error":{"code":…,"message":…}}}}.
+ * {@code sygnal/event/report} is answered {@code 202} with an {@code Ack}; no callback follows.
  *
  * <ul>
- *   <li>2xx and not {@code NACK} → {@link Verdict#ACK};</li>
+ *   <li>2xx and not {@code NACK} → {@link Verdict#ACK} (202 included);</li>
  *   <li>{@code NACK} in the body, or a 4xx other than 408 / 429 → {@link Verdict#NACK} (no retry);</li>
  *   <li>5xx, 408, 429, timeout or no answer → {@link Verdict#RETRY}.</li>
  * </ul>

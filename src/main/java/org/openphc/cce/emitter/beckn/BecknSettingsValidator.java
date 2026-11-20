@@ -1,14 +1,15 @@
 package org.openphc.cce.emitter.beckn;
 
 import org.openphc.cce.emitter.config.EmitterProperties.BecknConfig;
-import org.openphc.cce.emitter.config.EmitterProperties.BecknContractConfig;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Checks the {@code emitter.beckn.*} settings that Beckn mode needs. Only the settings of the legs
- * that are on are required.
+ * Checks the {@code emitter.beckn.*} settings that Beckn (Sygnal) mode needs. The HIE settings are
+ * required only when the {@code cce-events} leg is on.
  */
 public final class BecknSettingsValidator {
 
@@ -16,55 +17,61 @@ public final class BecknSettingsValidator {
     }
 
     public static void validate(BecknConfig beckn) {
-        List<String> missing = new ArrayList<>();
+        List<String> problems = new ArrayList<>();
         var self = beckn.getSelf();
-        var peer = beckn.getSpice();
-        var legs = beckn.getLegs();
+        var hie = beckn.getHie();
 
-        require(missing, "emitter.beckn.schema-base-url", beckn.getSchemaBaseUrl());
+        require(problems, "emitter.beckn.schema-base-url", beckn.getSchemaBaseUrl());
         if (beckn.getOnix().getTimeout() == null || beckn.getOnix().getTimeout().isNegative()
                 || beckn.getOnix().getTimeout().isZero()) {
-            missing.add("emitter.beckn.onix.timeout (must be > 0)");
+            problems.add("emitter.beckn.onix.timeout (must be > 0)");
         }
-        if (legs.isCceEvents() || legs.isReferralsOut()) {
-            require(missing, "emitter.beckn.onix.bap-caller-url", beckn.getOnix().getBapCallerUrl());
-            require(missing, "emitter.beckn.self.bap-id", self.getBapId());
-            require(missing, "emitter.beckn.self.bap-uri", self.getBapUri());
+        if (beckn.getLegs().isCceEvents()) {
+            require(problems, "emitter.beckn.onix.caller-url", beckn.getOnix().getCallerUrl());
+            require(problems, "emitter.beckn.self.id", self.getId());
+            require(problems, "emitter.beckn.self.network-id", self.getNetworkId());
+            require(problems, "emitter.beckn.hie.id", hie.getId());
+            if (require(problems, "emitter.beckn.hie.uri", hie.getUri()) && !isHttpUrl(hie.getUri())) {
+                problems.add("emitter.beckn.hie.uri (must be an absolute http(s) URL)");
+            }
+            if (!isBlank(hie.getTransactionId()) && !isUuid(hie.getTransactionId().trim())) {
+                problems.add("emitter.beckn.hie.transaction-id (must be a UUID, or empty for a new one per event)");
+            }
         }
-        if (legs.isCceEvents()) {
-            var hie = beckn.getOpenhim();
-            require(missing, "emitter.beckn.openhim.bpp-id", hie.getBppId());
-            require(missing, "emitter.beckn.openhim.bpp-uri", hie.getBppUri());
-            require(missing, "emitter.beckn.openhim.contract-id", hie.getContractId());
-            require(missing, "emitter.beckn.openhim.transaction-id", hie.getTransactionId());
-            require(missing, "emitter.beckn.openhim.commitment-file", hie.getCommitmentFile());
-        }
-        if (legs.isReferralsIn()) {
-            require(missing, "emitter.beckn.onix.bpp-caller-url", beckn.getOnix().getBppCallerUrl());
-            require(missing, "emitter.beckn.self.bpp-id", self.getBppId());
-            require(missing, "emitter.beckn.self.bpp-uri", self.getBppUri());
-            require(missing, "emitter.beckn.spice.bap-id", peer.getBapId());
-            require(missing, "emitter.beckn.spice.bap-uri", peer.getBapUri());
-            requireContract(missing, "emitter.beckn.spice.referrals-in", peer.getReferralsIn());
-        }
-        if (legs.isReferralsOut()) {
-            require(missing, "emitter.beckn.spice.bpp-id", peer.getBppId());
-            require(missing, "emitter.beckn.spice.bpp-uri", peer.getBppUri());
-            requireContract(missing, "emitter.beckn.spice.referrals-out", peer.getReferralsOut());
-        }
-        if (!missing.isEmpty()) {
-            throw new IllegalStateException("OPENMRS_EMITTER_TARGET=beckn but these Beckn settings are missing: "
-                    + String.join(", ", missing) + " (see docs/beckn-integration.md § 11)");
+        if (!problems.isEmpty()) {
+            throw new IllegalStateException("OPENMRS_EMITTER_TARGET=beckn but these Beckn settings are missing or wrong: "
+                    + String.join(", ", problems) + " (see docs/beckn-integration.md § 11)");
         }
     }
 
-    private static void requireContract(List<String> missing, String prefix, BecknContractConfig contract) {
-        require(missing, prefix + ".contract-id", contract.getContractId());
-        require(missing, prefix + ".transaction-id", contract.getTransactionId());
-        require(missing, prefix + ".commitment-file", contract.getCommitmentFile());
+    /** Adds the name when the value is blank. Returns true when the value is set. */
+    private static boolean require(List<String> problems, String name, String value) {
+        if (isBlank(value)) {
+            problems.add(name);
+            return false;
+        }
+        return true;
     }
 
-    private static void require(List<String> missing, String name, String value) {
-        if (value == null || value.isBlank()) missing.add(name);
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static boolean isUuid(String value) {
+        try {
+            return UUID.fromString(value).toString().equalsIgnoreCase(value);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private static boolean isHttpUrl(String value) {
+        try {
+            URI uri = URI.create(value.trim());
+            return uri.isAbsolute() && uri.getHost() != null
+                    && ("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 }

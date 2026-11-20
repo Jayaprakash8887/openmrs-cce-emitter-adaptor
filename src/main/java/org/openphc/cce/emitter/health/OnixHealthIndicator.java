@@ -1,5 +1,6 @@
 package org.openphc.cce.emitter.health;
 
+import org.openphc.cce.emitter.beckn.BecknMessageBuilder;
 import org.openphc.cce.emitter.config.EmitterProperties;
 import org.openphc.cce.emitter.config.EmitterProperties.BecknConfig;
 import org.springframework.boot.actuate.health.Health;
@@ -18,10 +19,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Beckn mode only: checks that the {@code openmrs-onix} callers the emitter posts to are reachable.
- * Any HTTP answer counts as reachable (the callers take only POST); no answer means DOWN. Only the
- * callers of the legs that are on are checked. Replaces the OpenHIM check, which is not on the
- * Beckn path.
+ * Beckn mode only: checks that the Sygnal caller of this emitter's onix ({@code onix-openmrs}) is
+ * reachable, by a GET to {@code {caller-url}/sygnal/event/report}. Any HTTP answer counts as
+ * reachable (the caller takes only POST); no answer means DOWN. Nothing is checked when the
+ * {@code cce-events} leg is off. Replaces the OpenHIM check, which is not on the Beckn path.
  */
 @Component("onix")
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)
@@ -50,11 +51,8 @@ public class OnixHealthIndicator implements HealthIndicator {
     public Health health() {
         BecknConfig beckn = properties.getBeckn();
         Map<String, String> targets = new LinkedHashMap<>();
-        if (beckn.getLegs().isCceEvents() || beckn.getLegs().isReferralsOut()) {
-            targets.put("bap", strip(beckn.getOnix().getBapCallerUrl()) + "/update");
-        }
-        if (beckn.getLegs().isReferralsIn()) {
-            targets.put("bpp", strip(beckn.getOnix().getBppCallerUrl()) + "/on_status");
+        if (beckn.getLegs().isCceEvents()) {
+            targets.put("caller", strip(beckn.getOnix().getCallerUrl()) + "/" + BecknMessageBuilder.ACTION_EVENT_REPORT);
         }
         Health.Builder builder = Health.up();
         for (Map.Entry<String, String> target : targets.entrySet()) {
