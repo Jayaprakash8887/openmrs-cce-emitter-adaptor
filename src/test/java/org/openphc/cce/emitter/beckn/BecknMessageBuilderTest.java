@@ -208,7 +208,11 @@ class BecknMessageBuilderTest {
 
         assertEquals(Leg.REFERRALS_IN, msg.leg());
         assertEquals("http://onix-bpp:8082/bpp/caller/on_status", msg.url());
-        assertEquals(sample, normalise(msg.forAttempt(), sample));
+        ObjectNode built = normalise(msg.forAttempt(), sample);
+        assertEquals(sample, built);
+        // the box is the CoordinationEvent of the Sygnal report, with @context first: same keys, same order
+        assertEquals(orderedFieldNames(sample.at("/message/contract/performance/0/performanceAttributes")),
+                orderedFieldNames(built.at("/message/contract/performance/0/performanceAttributes")));
     }
 
     @Test
@@ -229,8 +233,38 @@ class BecknMessageBuilderTest {
         assertEquals("referral", body.at("/message/contract/commitments/0/id").asText());
         assertEquals(1, body.at("/message/contract/performance").size());
         assertEquals("ev-1", body.at("/message/contract/performance/0/id").asText());
-        assertEquals("ServiceRequest/sr9", body.at("/message/contract/performance/0/performanceAttributes/sourceEventId").asText());
-        assertEquals(resource, body.at("/message/contract/performance/0/performanceAttributes/resource"));
+        JsonNode box = body.at("/message/contract/performance/0/performanceAttributes");
+        assertEquals("https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CoordinationEvent/v3.0/context.jsonld",
+                box.get("@context").asText());
+        assertEquals("sygnal:CoordinationEvent", box.get("@type").asText());
+        assertEquals("ev-1", box.get("id").asText());
+        assertEquals(1, box.get("revision").asInt());
+        assertEquals("DELIVERY_RECORDED", box.get("eventType").asText());
+        assertEquals("bap.openmrs.example.org", box.at("/from/id").asText(), "from.id is the sender, context.bapId");
+        assertEquals("PROVIDER", box.at("/from/role").asText());
+        Instant.parse(box.get("occurredAt").asText());
+        assertEquals("119", box.get("patientId").asText());
+        assertEquals("4.0.1", box.get("fhirVersion").asText());
+        assertEquals("ServiceRequest/sr9", box.get("sourceEventId").asText());
+        assertEquals(resource, box.get("resource"));
+        assertFalse(BecknJson.write(body).contains("CceClinicalEvent"), "no cce: type in the box");
+    }
+
+    @Test
+    void referralBoxIsTheEventOfTheSygnalReportWithAContext() {
+        JsonNode resource = BecknJson.parse(ENCOUNTER);
+        BecknMessageBuilder builder = builder(BecknTestSettings.properties());
+        ObjectNode event = (ObjectNode) builder.eventReport(resource, "ev", "p").forAttempt().at("/message/events/0");
+        ObjectNode box = (ObjectNode) builder.peerReferralUpdate(resource, "ev", "p").forAttempt()
+                .at("/message/contract/performance/0/performanceAttributes");
+
+        assertEquals("@context", orderedFieldNames(box).get(0));
+        box.remove("@context");
+        assertEquals(orderedFieldNames(event), orderedFieldNames(box));
+        for (String field : new String[]{"@type", "id", "revision", "eventType", "granularity", "patientId",
+                "fhirVersion", "sourceEventId", "resource"}) {
+            assertEquals(event.get(field), box.get(field), field);
+        }
     }
 
     @Test

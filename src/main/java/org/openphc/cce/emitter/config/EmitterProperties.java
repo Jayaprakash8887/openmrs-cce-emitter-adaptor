@@ -59,7 +59,7 @@ public class EmitterProperties {
     @Data
     public static class BecknConfig {
         private OnixConfig onix = new OnixConfig();
-        /** Base of the {@code CceClinicalEvent} {@code @context} URL (the box of the Beckn referral legs). */
+        /** Base of the {@code @context} URL of the box of the Beckn referral legs ({@code CoordinationEvent/v3.0}). */
         private String schemaBaseUrl = "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema";
         /** The CCE events leg: Sygnal {@code sygnal/event/report} to the HIE. */
         private SygnalConfig sygnal = new SygnalConfig();

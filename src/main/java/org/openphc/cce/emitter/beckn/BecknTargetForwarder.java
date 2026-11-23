@@ -23,7 +23,7 @@ import java.util.List;
  *
  * <p>A resource with no patient (for example {@code Location}, {@code Practitioner}) is skipped:
  * {@code patientId} is required on every leg, by the {@code sygnal:CoordinationEvent} of the CCE
- * profile and by the {@code CceClinicalEvent} box of the referral legs.
+ * profile, in the report to the HIE and in the box of the referral legs.
  */
 @Service
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)
