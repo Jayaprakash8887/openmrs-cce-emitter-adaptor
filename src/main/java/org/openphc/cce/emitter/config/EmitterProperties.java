@@ -87,7 +87,7 @@ public class EmitterProperties {
          * action, {@code /sygnal/event/report}.
          */
         private String callerUrl = "http://onix-openmrs:8082/sygnal/caller";
-        /** OpenMRS's Sygnal subscriber id: {@code context.senderId} and {@code from.id}. */
+        /** OpenMRS's Sygnal subscriber id: {@code context.senderId}. */
         private String id = "bap.openmrs.nextsteps.mdtlabs.org";
         /** Required. Sent as {@code context.networkId}. */
         private String networkId;

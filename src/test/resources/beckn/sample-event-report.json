@@ -13,29 +13,21 @@
   "message": {
     "events": [
       {
-        "@type": "sygnal:CoordinationEvent",
+        "@context": "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CceClinicalEvent/v2.0/context.jsonld",
+        "@type": "cce:CceClinicalEvent",
         "id": "3f6c1c1e-8a53-5b0e-9d7a-2b6f4e1a9c10",
-        "revision": 1,
-        "eventType": "DELIVERY_RECORDED",
-        "granularity": "INDIVIDUAL",
-        "from": { "id": "bap.openmrs.nextsteps.mdtlabs.org", "role": "PROVIDER" },
         "occurredAt": "2026-11-13T08:00:12Z",
-        "eventAttributes": {
-          "@context": "https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CceClinicalEvent/v1.0/context.jsonld",
-          "@type": "cce:CceClinicalEvent",
-          "eventType": "Encounter",
-          "patientId": "1198503150001234",
-          "fhirVersion": "4.0.1",
-          "sourceEventId": "Encounter/7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
-          "resource": {
-            "resourceType": "Encounter",
-            "id": "7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
-            "meta": { "lastUpdated": "2026-11-13T08:00:12.000+00:00" },
-            "status": "finished",
-            "subject": { "reference": "Patient/1198503150001234" },
-            "period": { "start": "2026-11-13T07:30:00Z", "end": "2026-11-13T08:00:00Z" },
-            "location": [ { "location": { "reference": "Location/0002" } } ]
-          }
+        "patientId": "1198503150001234",
+        "fhirVersion": "4.0.1",
+        "sourceEventId": "Encounter/7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
+        "resource": {
+          "resourceType": "Encounter",
+          "id": "7d2c9b1e-4f3a-4e8b-9c6d-5a1b2c3d4e5f",
+          "meta": { "lastUpdated": "2026-11-13T08:00:12.000+00:00" },
+          "status": "finished",
+          "subject": { "reference": "Patient/1198503150001234" },
+          "period": { "start": "2026-11-13T07:30:00Z", "end": "2026-11-13T08:00:00Z" },
+          "location": [ { "location": { "reference": "Location/0002" } } ]
         }
       }
     ]

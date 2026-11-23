@@ -22,13 +22,14 @@ import java.util.UUID;
  * Builds the messages of the emitter (docs/beckn-integration.md § 8–9), from the settings:
  *
  * <ul>
- *   <li>the CCE events leg: the Sygnal action {@code sygnal/event/report} to the HIE, with one
- *       {@code sygnal:CoordinationEvent} whose {@code eventAttributes} is the {@code CceClinicalEvent}
- *       box. No contract, no commitment;</li>
+ *   <li>the CCE events leg: the Sygnal action {@code sygnal/event/report} to the HIE, with one flat
+ *       {@code cce:CceClinicalEvent} v2.0 in {@code message.events}: the event itself, with its own
+ *       {@code id} and {@code occurredAt}, and the FHIR resource. No Sygnal wrapper, no attribute bag,
+ *       no contract, no commitment;</li>
  *   <li>the Spice referral legs (standard Beckn): {@code on_status} and {@code update}, with
  *       {@code context}, {@code message.contract} and one performance entry whose
- *       {@code performanceAttributes} is the same box. The referral commitment files are read once,
- *       at start.</li>
+ *       {@code performanceAttributes} is the {@code CceClinicalEvent} v1.0 box, as before. The
+ *       referral commitment files are read once, at start.</li>
  * </ul>
  * On every leg the event id is the id of the one event / performance entry.
  */
@@ -42,10 +43,10 @@ public class BecknMessageBuilder {
     public static final String ACTION_UPDATE = "update";
     public static final String ACTION_ON_STATUS = "on_status";
     public static final String ACTION_EVENT_REPORT = "sygnal/event/report";
-    public static final String COORDINATION_EVENT_TYPE = "sygnal:CoordinationEvent";
-    public static final String SYGNAL_EVENT_TYPE = "DELIVERY_RECORDED";
-    public static final String GRANULARITY = "INDIVIDUAL";
-    public static final String ROLE = "PROVIDER";
+    /** JSON-LD context of the flat event of {@code sygnal/event/report}, under the schema base URL. */
+    static final String EVENT_REPORT_CONTEXT_PATH = "/CceClinicalEvent/v2.0/context.jsonld";
+    /** JSON-LD context of the {@code performanceAttributes} box of the Beckn referral legs. */
+    static final String REFERRAL_BOX_CONTEXT_PATH = "/CceClinicalEvent/v1.0/context.jsonld";
 
     private final BecknConfig beckn;
     private final JsonNode referralsInCommitment;
@@ -63,7 +64,11 @@ public class BecknMessageBuilder {
                 : null;
     }
 
-    /** Sygnal {@code sygnal/event/report} to the HIE, posted to this emitter's onix Sygnal caller. */
+    /**
+     * Sygnal {@code sygnal/event/report} to the HIE, posted to this emitter's onix Sygnal caller.
+     * {@code message.events} holds exactly one {@code cce:CceClinicalEvent} v2.0. That object is
+     * closed: only the fields set here, and never a null.
+     */
     public OutgoingMessage eventReport(JsonNode resource, String eventId, String patientId) {
         var sygnal = beckn.getSygnal();
         var hie = sygnal.getHie();
@@ -85,16 +90,17 @@ public class BecknMessageBuilder {
         context.put("timestamp", now());
 
         ObjectNode event = root.putObject("message").putArray("events").addObject();
-        event.put("@type", COORDINATION_EVENT_TYPE);
+        event.put("@context", stripTrailingSlash(beckn.getSchemaBaseUrl()) + EVENT_REPORT_CONTEXT_PATH);
+        event.put("@type", EVENT_TYPE);
         event.put("id", eventId);
-        event.put("revision", 1);
-        event.put("eventType", SYGNAL_EVENT_TYPE);
-        event.put("granularity", GRANULARITY);
-        ObjectNode from = event.putObject("from");
-        from.put("id", sygnal.getId());
-        from.put("role", ROLE);
         event.put("occurredAt", occurredAt(resource));
-        event.set("eventAttributes", clinicalEvent(resource, patientId));
+        event.put("patientId", patientId);
+        event.put("fhirVersion", FHIR_VERSION);
+        String sourceEventId = sourceEventId(resource);
+        if (sourceEventId != null) {
+            event.put("sourceEventId", sourceEventId);
+        }
+        event.set("resource", resource.deepCopy());
 
         return message(Leg.CCE_EVENTS, ACTION_EVENT_REPORT, sygnal.getCallerUrl(), root, eventId, resource,
                 transactionId, null);
@@ -153,14 +159,18 @@ public class BecknMessageBuilder {
         if (status != null) {
             performance.putObject("status").put("code", status);
         }
-        performance.set("performanceAttributes", clinicalEvent(resource, patientId));
+        performance.set("performanceAttributes", referralBox(resource, patientId));
         return performance;
     }
 
-    /** The {@code cce:CceClinicalEvent} box: {@code eventAttributes} (Sygnal) or {@code performanceAttributes} (Beckn). */
-    private ObjectNode clinicalEvent(JsonNode resource, String patientId) {
+    /**
+     * The {@code cce:CceClinicalEvent} v1.0 box: {@code performanceAttributes} of the Beckn referral
+     * legs only. It is not the event of {@code sygnal/event/report}, which is built in
+     * {@link #eventReport}; the two are kept apart so that a change to one never changes the other.
+     */
+    private ObjectNode referralBox(JsonNode resource, String patientId) {
         ObjectNode attrs = BecknJson.MAPPER.createObjectNode();
-        attrs.put("@context", stripTrailingSlash(beckn.getSchemaBaseUrl()) + "/CceClinicalEvent/v1.0/context.jsonld");
+        attrs.put("@context", stripTrailingSlash(beckn.getSchemaBaseUrl()) + REFERRAL_BOX_CONTEXT_PATH);
         attrs.put("@type", EVENT_TYPE);
         String resourceType = BecknJson.text(resource, "resourceType");
         attrs.put("eventType", resourceType);
@@ -188,6 +198,13 @@ public class BecknMessageBuilder {
         return root;
     }
 
+    /** {@code {ResourceType}/{id}}: the HMIS's own name for the event; null when either part is missing. */
+    private static String sourceEventId(JsonNode resource) {
+        String resourceType = BecknJson.text(resource, "resourceType");
+        String id = BecknJson.text(resource, "id");
+        return resourceType != null && id != null ? resourceType + "/" + id : null;
+    }
+
     /** The URL is plain text, so the slashes of a Sygnal action are never encoded. */
     private static OutgoingMessage message(Leg leg, String action, String callerUrl, ObjectNode body, String eventId,
                                            JsonNode resource, String transactionId, String contractId) {
@@ -196,7 +213,7 @@ public class BecknMessageBuilder {
     }
 
     /**
-     * When the event happened (Sygnal {@code occurredAt}): {@code meta.lastUpdated} of the resource,
+     * When the event happened ({@code occurredAt} of the event): {@code meta.lastUpdated} of the resource,
      * i.e. when OpenMRS recorded this version of it (the version the event id is the hash of), as a
      * UTC instant. Falls back to the time the message is built when it is missing or not a full
      * timestamp. The time of the clinical act itself (for example {@code Encounter.period.start})
