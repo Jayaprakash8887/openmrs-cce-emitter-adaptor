@@ -75,7 +75,7 @@ Used only when `OPENMRS_EMITTER_TARGET=beckn`. The emitter then makes no call to
 
 Bodies:
 
-- Sygnal: `context` with `senderId` / `receiverId` / `receiverUri` (no `bapId` / `bppId`), and exactly one flat `cce:CceClinicalEvent` v2.0 in `message.events`: `@context`, `@type`, `id`, `occurredAt`, `patientId`, `fhirVersion`, `sourceEventId` and the FHIR `resource`. The object is closed; there is no `sygnal:CoordinationEvent` wrapper and no `eventAttributes` bag (changed on 2026-11-23, see [beckn-integration.md](beckn-integration.md)).
+- Sygnal: `context` with `senderId` / `receiverId` / `receiverUri` (no `bapId` / `bppId`), and exactly one `sygnal:CoordinationEvent` in `message.events`, as extended in the CCE profile of Sygnal v3.0: `@type`, `id`, `revision`, `eventType` (`DELIVERY_RECORDED`), `granularity`, `from`, `occurredAt`, `patientId`, `fhirVersion`, `sourceEventId` and the FHIR `resource`. There is no `cce:CceClinicalEvent` type, no `eventAttributes` bag and no `@context` (changed on 2026-11-23, see [beckn-integration.md](beckn-integration.md)).
 - Beckn (unchanged): a Beckn 2.0.0 message with exactly one performance entry, whose `performanceAttributes` box is a `CceClinicalEvent` v1.0 holding the FHIR resource.
 
 Samples are in [beckn-integration.md](beckn-integration.md) § 9.

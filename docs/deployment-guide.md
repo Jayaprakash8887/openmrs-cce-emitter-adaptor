@@ -116,7 +116,7 @@ The Beckn ids, contract ids and facility codes of the referral legs go in YAML o
 ### Beckn Mode Checklist
 
 - [ ] `onix-openmrs`, `onix-bap` and `onix-bpp` are running on `cce-net` and reachable from the emitter
-- [ ] `onix-openmrs` holds OpenMRS's keys for subscriber id `bap.openmrs.nextsteps.mdtlabs.org` (= `OPENMRS_EMITTER_BECKN_SYGNAL_ID`), the CCE Sygnal profile and the `CceClinicalEvent` schema (from the cce-beckn-service `schema/` folder)
+- [ ] `onix-openmrs` holds OpenMRS's keys for subscriber id `bap.openmrs.nextsteps.mdtlabs.org` (= `OPENMRS_EMITTER_BECKN_SYGNAL_ID`), and the CCE Sygnal profile v3.0 (`schema/sygnal-profile/v3.0/cce-sygnal-apis.yaml` of the cce-beckn-service repository). It needs no payload schema: no object of the Sygnal messages carries `@context`
 - [ ] `onix-bap` and `onix-bpp` have OpenMRS's own Beckn ids and keys, and the `CceClinicalEvent` schema
 - [ ] `OPENMRS_EMITTER_BECKN_SYGNAL_HIE_URI` is set (the emitter does not start in Beckn mode without it)
 - [ ] `responseHeaderTimeout` on `onix-openmrs` and `onix-bap` is raised from the 5 s default to at least 45 s, and the emitter's `emitter.beckn.onix.timeout` is 50 s ([beckn-integration.md](beckn-integration.md) § 10.4)

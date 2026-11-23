@@ -22,10 +22,11 @@ import java.util.UUID;
  * Builds the messages of the emitter (docs/beckn-integration.md § 8–9), from the settings:
  *
  * <ul>
- *   <li>the CCE events leg: the Sygnal action {@code sygnal/event/report} to the HIE, with one flat
- *       {@code cce:CceClinicalEvent} v2.0 in {@code message.events}: the event itself, with its own
- *       {@code id} and {@code occurredAt}, and the FHIR resource. No Sygnal wrapper, no attribute bag,
- *       no contract, no commitment;</li>
+ *   <li>the CCE events leg: the Sygnal action {@code sygnal/event/report} to the HIE, with one
+ *       {@code sygnal:CoordinationEvent} in {@code message.events}, as extended in the CCE profile of
+ *       Sygnal v3.0: the Sygnal fields, and the clinical-event fields ({@code patientId},
+ *       {@code fhirVersion}, {@code sourceEventId}, {@code resource}) directly on it. No
+ *       {@code cce:} type, no attribute bag, no {@code @context}, no contract, no commitment;</li>
  *   <li>the Spice referral legs (standard Beckn): {@code on_status} and {@code update}, with
  *       {@code context}, {@code message.contract} and one performance entry whose
  *       {@code performanceAttributes} is the {@code CceClinicalEvent} v1.0 box, as before. The
@@ -43,8 +44,10 @@ public class BecknMessageBuilder {
     public static final String ACTION_UPDATE = "update";
     public static final String ACTION_ON_STATUS = "on_status";
     public static final String ACTION_EVENT_REPORT = "sygnal/event/report";
-    /** JSON-LD context of the flat event of {@code sygnal/event/report}, under the schema base URL. */
-    static final String EVENT_REPORT_CONTEXT_PATH = "/CceClinicalEvent/v2.0/context.jsonld";
+    public static final String COORDINATION_EVENT_TYPE = "sygnal:CoordinationEvent";
+    public static final String SYGNAL_EVENT_TYPE = "DELIVERY_RECORDED";
+    public static final String GRANULARITY = "INDIVIDUAL";
+    public static final String ROLE = "PROVIDER";
     /** JSON-LD context of the {@code performanceAttributes} box of the Beckn referral legs. */
     static final String REFERRAL_BOX_CONTEXT_PATH = "/CceClinicalEvent/v1.0/context.jsonld";
 
@@ -66,8 +69,8 @@ public class BecknMessageBuilder {
 
     /**
      * Sygnal {@code sygnal/event/report} to the HIE, posted to this emitter's onix Sygnal caller.
-     * {@code message.events} holds exactly one {@code cce:CceClinicalEvent} v2.0. That object is
-     * closed: only the fields set here, and never a null.
+     * {@code message.events} holds exactly one {@code sygnal:CoordinationEvent} of the CCE profile
+     * v3.0: only the fields set here, in this order, and never a null.
      */
     public OutgoingMessage eventReport(JsonNode resource, String eventId, String patientId) {
         var sygnal = beckn.getSygnal();
@@ -90,9 +93,14 @@ public class BecknMessageBuilder {
         context.put("timestamp", now());
 
         ObjectNode event = root.putObject("message").putArray("events").addObject();
-        event.put("@context", stripTrailingSlash(beckn.getSchemaBaseUrl()) + EVENT_REPORT_CONTEXT_PATH);
-        event.put("@type", EVENT_TYPE);
+        event.put("@type", COORDINATION_EVENT_TYPE);
         event.put("id", eventId);
+        event.put("revision", 1);
+        event.put("eventType", SYGNAL_EVENT_TYPE);
+        event.put("granularity", GRANULARITY);
+        ObjectNode from = event.putObject("from");
+        from.put("id", sygnal.getId());
+        from.put("role", ROLE);
         event.put("occurredAt", occurredAt(resource));
         event.put("patientId", patientId);
         event.put("fhirVersion", FHIR_VERSION);
