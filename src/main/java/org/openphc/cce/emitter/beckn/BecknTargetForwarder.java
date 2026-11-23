@@ -22,7 +22,7 @@ import java.util.List;
  * only if every message got {@code Ack}.
  *
  * <p>A resource with no patient (for example {@code Location}, {@code Practitioner}) is skipped:
- * {@code patientId} is required by the {@code CceClinicalEvent} box.
+ * {@code patientId} is required by {@code CceClinicalEvent}.
  */
 @Service
 @ConditionalOnProperty(prefix = "emitter", name = "target", havingValue = "beckn", matchIfMissing = true)

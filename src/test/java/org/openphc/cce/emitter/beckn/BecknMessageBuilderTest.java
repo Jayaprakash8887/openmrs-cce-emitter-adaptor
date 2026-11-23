@@ -19,7 +19,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Message shapes against the samples in docs/beckn-integration.md § 9: the Sygnal event report (CCE
- * Sygnal contract) and the Beckn referral messages to Spice (unchanged from demo-beckn).
+ * Sygnal contract, with a flat {@code cce:CceClinicalEvent} v2.0 as the event) and the Beckn referral
+ * messages to Spice (unchanged from demo-beckn).
  */
 class BecknMessageBuilderTest {
 
@@ -59,7 +60,7 @@ class BecknMessageBuilderTest {
     @Test
     void eventReportMatchesSample() throws Exception {
         JsonNode sample = sample();
-        JsonNode resource = sample.at("/message/events/0/eventAttributes/resource");
+        JsonNode resource = sample.at("/message/events/0/resource");
         String eventId = sample.at("/message/events/0/id").asText();
 
         OutgoingMessage msg = builder(BecknTestSettings.properties()).eventReport(resource, eventId, "1198503150001234");
@@ -72,7 +73,7 @@ class BecknMessageBuilderTest {
     }
 
     @Test
-    void contextIsTheClosedSygnalContextAndTheEventHasNoContractOrContext() {
+    void contextIsTheClosedSygnalContextAndTheEventIsAFlatClosedCceClinicalEvent() {
         ObjectNode body = builder(BecknTestSettings.properties())
                 .eventReport(BecknJson.parse(ENCOUNTER), "ev", "p").forAttempt();
 
@@ -82,17 +83,38 @@ class BecknMessageBuilderTest {
         assertEquals(Set.of("events"), fieldNames(body.get("message")));
         assertEquals(1, body.at("/message/events").size());
         JsonNode event = body.at("/message/events/0");
-        assertEquals(new TreeSet<>(List.of("@type", "id", "revision", "eventType", "granularity", "from", "occurredAt",
-                "eventAttributes")), fieldNames(event));
-        assertFalse(event.has("@context"));
-        assertEquals(1, event.get("revision").asInt());
-        assertTrue(event.get("revision").isInt());
-        assertEquals(body.at("/context/senderId"), event.at("/from/id"));
-        assertEquals("PROVIDER", event.at("/from/role").asText());
+        // the event is closed: exactly these keys, none of them null
+        assertEquals(new TreeSet<>(List.of("@context", "@type", "id", "occurredAt", "patientId", "fhirVersion",
+                "sourceEventId", "resource")), fieldNames(event));
+        event.fields().forEachRemaining(field -> assertFalse(field.getValue().isNull(), field.getKey()));
+        assertEquals("https://raw.githubusercontent.com/openphc/cce-beckn-service/main/schema/CceClinicalEvent/v2.0/context.jsonld",
+                event.get("@context").asText());
+        assertEquals("cce:CceClinicalEvent", event.get("@type").asText());
+        assertEquals("ev", event.get("id").asText());
+        Instant.parse(event.get("occurredAt").asText());
+        assertEquals("p", event.get("patientId").asText());
+        assertEquals("4.0.1", event.get("fhirVersion").asText());
+        assertEquals("Encounter/e", event.get("sourceEventId").asText());
+        assertEquals(BecknJson.parse(ENCOUNTER), event.get("resource"));
         String text = BecknJson.write(body);
-        for (String gone : new String[]{"bapId", "bppId", "bapUri", "bppUri", "contract", "commitments", "performance"}) {
+        for (String gone : new String[]{"bapId", "bppId", "bapUri", "bppUri", "contract", "commitments", "performance",
+                "eventAttributes", "performanceAttributes", "revision", "eventType", "granularity", "from"}) {
             assertFalse(text.contains("\"" + gone + "\""), gone);
         }
+        assertFalse(text.contains("sygnal:"), "no Sygnal type in the message");
+        assertFalse(text.contains("CoordinationEvent"), "no Sygnal type in the message");
+        assertFalse(text.contains("DELIVERY_RECORDED"), "no Sygnal event type in the message");
+    }
+
+    @Test
+    void sourceEventIdIsLeftOutNotNullWhenTheResourceHasNoId() {
+        JsonNode event = builder(BecknTestSettings.properties())
+                .eventReport(BecknJson.parse("{\"resourceType\":\"Encounter\",\"subject\":{\"reference\":\"Patient/p\"}}"),
+                        "ev", "p")
+                .forAttempt().at("/message/events/0");
+
+        assertEquals(new TreeSet<>(List.of("@context", "@type", "id", "occurredAt", "patientId", "fhirVersion",
+                "resource")), fieldNames(event));
     }
 
     @Test
@@ -106,8 +128,8 @@ class BecknMessageBuilderTest {
 
         assertEquals("http://onix:9000/sygnal/caller/sygnal/event/report", msg.url());
         assertEquals("openphc-demo", body.at("/context/networkId").asText());
-        assertEquals("https://schemas.example.org/base/CceClinicalEvent/v1.0/context.jsonld",
-                body.at("/message/events/0/eventAttributes/@context").asText());
+        assertEquals("https://schemas.example.org/base/CceClinicalEvent/v2.0/context.jsonld",
+                body.at("/message/events/0/@context").asText());
     }
 
     @Test
